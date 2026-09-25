@@ -2865,11 +2865,25 @@ class EPUBBookLoader(BaseBookLoader):
             self._save_progress()
         return index, processed_count
 
-    def translate_paragraphs_acc(self, p_list, send_num):
+    def translate_paragraphs_acc(self, p_list, send_num, jobs=None):
         count = 0
         wait_p_list = []
+        p_to_save_len = len(self.p_to_save)
+
         for i in range(len(p_list)):
             p = p_list[i]
+            job = jobs[i] if jobs and i < len(jobs) else None
+            job_idx = job.global_index if job is not None else None
+
+            # When resuming, reuse cached translation if available
+            if self.resume and job_idx is not None and job_idx < p_to_save_len:
+                cached_text = self.p_to_save[job_idx]
+                if cached_text:
+                    self._insert_trans_preserving_tags(
+                        p, cached_text, self.translation_style, self.single_translate
+                    )
+                continue
+
             if not self.quiet:
                 print(f"translating {i}/{len(p_list)}")
             temp_p = copy(p)
@@ -2909,13 +2923,25 @@ class EPUBBookLoader(BaseBookLoader):
 
     def _deal_old_acc(self, wait_p_list, single_translate):
         """Helper for translate_paragraphs_acc - process accumulated paragraphs."""
-        flush_waiting(
-            self.translate_model,
-            wait_p_list,
-            self._insert_trans_preserving_tags,
-            self.translation_style,
-            single_translate,
-        )
+        if not wait_p_list:
+            return
+        texts = [p.text for p in wait_p_list]
+        result_txt_list = translate_list_or_singles(self.translate_model, texts)
+        for i in range(len(wait_p_list)):
+            if i < len(result_txt_list):
+                t = shorter_result_link(result_txt_list[i])
+                self._insert_trans_preserving_tags(
+                    wait_p_list[i],
+                    t,
+                    self.translation_style,
+                    single_translate,
+                )
+                self.p_to_save.append(t)
+        wait_p_list.clear()
+        try:
+            self._save_progress()
+        except Exception:
+            pass
 
     def _deal_new_acc(self, p, wait_p_list, single_translate):
         """Helper for translate_paragraphs_acc - process single paragraph."""
@@ -2927,6 +2953,11 @@ class EPUBBookLoader(BaseBookLoader):
             self.translation_style,
             single_translate,
         )
+        self.p_to_save.append(translation)
+        try:
+            self._save_progress()
+        except Exception:
+            pass
 
     def _split_into_sentences(self, text):
         """Split text into sentences on punctuation followed by whitespace + uppercase."""
@@ -3373,7 +3404,8 @@ class EPUBBookLoader(BaseBookLoader):
 
             print("------------------------------------------------------")
             print(f"dealing {item.file_name} ...")
-            self.translate_paragraphs_acc(p_list, send_num)
+            jobs = chapter_plan.jobs if chapter_plan else None
+            self.translate_paragraphs_acc(p_list, send_num, jobs=jobs)
         else:
             is_test_done = self.is_test and index >= self.test_num
             p_block = []
@@ -4015,6 +4047,13 @@ class EPUBBookLoader(BaseBookLoader):
                         chapter_plan=chapter_plan,
                     )
 
+                    # Save intermediate recovery book after each chapter
+                    try:
+                        name, _ = os.path.splitext(self.epub_name)
+                        self._write_book(f"{name}_bilingual_temp.epub", new_book)
+                    except Exception:
+                        pass
+
                     # Check for fatal error after processing
                     if self.translate_model._fatal_error_detected:
                         print(
@@ -4036,26 +4075,37 @@ class EPUBBookLoader(BaseBookLoader):
             else:
                 self._write_book(f"{name}_bilingual.epub", new_book)
                 self.announce_saved_book(f"{name}_bilingual.epub")
+                # Remove temporary files on complete success
+                try:
+                    if os.path.exists(self.bin_path):
+                        os.remove(self.bin_path)
+                    temp_epub = f"{name}_bilingual_temp.epub"
+                    if os.path.exists(temp_epub):
+                        os.remove(temp_epub)
+                except Exception:
+                    pass
         except KeyboardInterrupt as e:
             print(e)
-            # The accumulated_num guard is tag-mode-shaped: its positional
-            # slots are unreliable mid-batch. Plan-mode checkpoints are
-            # unit-keyed and only record finished units, so a batched plan
-            # run is exactly as resumable as an unbatched one.
-            if self.accumulated_num == 1 or self.plan_mode:
-                print("you can resume it next time")
+            print("you can resume it next time")
+            try:
                 self._save_progress()
+            except Exception:
+                pass
+            try:
                 self._save_temp_book()
-            # A halted run has no finished book. 0 told every caller — a
-            # script, a shell, an agent — that it did, and the shell's own
-            # code for a process killed by SIGINT is 130.
+            except Exception:
+                pass
+            try:
+                name, _ = os.path.splitext(self.epub_name)
+                self._write_book(f"{name}_bilingual_temp.epub", new_book)
+                print(f"[bold green]Saved recovery book: {name}_bilingual_temp.epub[/bold green]")
+            except Exception:
+                pass
             sys.exit(130)
         except Exception as e:
             # Handle connection errors gracefully
             error_msg = str(e)
             if getattr(e, "user_facing", False):
-                # The message is the whole explanation — a traceback on top
-                # of it only buries what the reader needs.
                 print(f"[bold red]{escape(error_msg)}[/bold red]")
             elif "Connection" in error_msg or "connection" in error_msg:
                 print(
@@ -4064,18 +4114,23 @@ class EPUBBookLoader(BaseBookLoader):
                 print("Please check your network connection or API server status.")
             else:
                 traceback.print_exc()
-            if self.accumulated_num == 1 or self.plan_mode:
-                print("Saving progress...")
-                try:
-                    self._save_progress()
-                    self._save_temp_book()
-                except Exception:
-                    # `_save_temp_book` re-raises so a failed recovery book is
-                    # never silent, but here it is already reported and the
-                    # run's own failure is the one that owes the caller an
-                    # exit code — letting it escape would lose the sys.exit
-                    # below and report the wrong cause.
-                    traceback.print_exc()
+
+            print("Saving progress...")
+            try:
+                self._save_progress()
+            except Exception:
+                pass
+            try:
+                self._save_temp_book()
+            except Exception:
+                pass
+            try:
+                name, _ = os.path.splitext(self.epub_name)
+                self._write_book(f"{name}_bilingual_temp.epub", new_book)
+                print(f"[bold green]Saved recovery book: {name}_bilingual_temp.epub[/bold green]")
+            except Exception:
+                pass
+            sys.exit(1)
             # the run failed and there is no output book; exiting 0 would
             # tell every caller the opposite
             sys.exit(1)
