@@ -44,6 +44,7 @@ PLACEHOLDER_MARKER = "FILL-ME"
 # with its address in `base_url`.
 API_STYLES = {
     "openai": "openai",
+    "responses": "responses",
     "anthropic": "anthropic",
     "claude": "anthropic",
     "gemini": "gemini",

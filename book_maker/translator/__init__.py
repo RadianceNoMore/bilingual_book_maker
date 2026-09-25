@@ -11,6 +11,7 @@ from book_maker.translator.groq_translator import GroqClient
 from book_maker.translator.litellm_translator import liteLLM
 from book_maker.translator.orcarouter_translator import OrcaRouterTranslator
 from book_maker.translator.qwen_translator import QwenTranslator
+from book_maker.translator.responses_translator import ResponsesTranslator
 from book_maker.translator.tencent_transmart_translator import TencentTranSmart
 from book_maker.translator.xai_translator import XAIClient
 
@@ -21,6 +22,7 @@ from book_maker.translator.xai_translator import XAIClient
 # services that speak only their own protocol and take no model at all.
 FORMAT_DICT = {
     "openai": ChatGPTAPI,
+    "responses": ResponsesTranslator,
     "anthropic": Claude,
     # Not a wire format but a local sidecar: `codex app-server` drives the
     # user's ChatGPT subscription, so there is no endpoint or key to name.
@@ -58,6 +60,7 @@ ROUTE_DICT = {"orcarouter": OrcaRouterTranslator}
 # MODEL_OPTIONAL_FORMATS in cli.py.
 LLM_FORMATS = (
     "openai",
+    "responses",
     "anthropic",
     "codex",
     "gemini",

@@ -35,6 +35,9 @@ from book_maker.translator.chatgptapi_translator import (
 from book_maker.translator.gemini_translator import (
     PROMPT_ENV_MAP as GEMINI_PROMPT_ENV_MAP,
 )
+from book_maker.translator.responses_translator import (
+    PROMPT_ENV_MAP as RESPONSES_PROMPT_ENV_MAP,
+)
 from book_maker.translator.capabilities import ModelUnavailable
 from book_maker.utils import LANGUAGES, TO_LANGUAGE_CODE, parse_language_spec
 
@@ -107,6 +110,7 @@ def language_guidance(spec):
 # exported for that vendor.
 FORMAT_ENV_KEYS = {
     "openai": ("BBM_API_KEY", "OPENAI_API_KEY", "BBM_OPENAI_API_KEY"),
+    "responses": ("BBM_API_KEY", "OPENCODE_API_KEY", "BBM_RESPONSES_API_KEY"),
     "anthropic": ("BBM_API_KEY", "ANTHROPIC_API_KEY", "BBM_CLAUDE_API_KEY"),
     "gemini": ("BBM_API_KEY", "BBM_GOOGLE_GEMINI_KEY", "GEMINI_API_KEY"),
     "qwen": ("BBM_API_KEY", "BBM_QWEN_API_KEY", "DASHSCOPE_API_KEY"),
@@ -122,6 +126,7 @@ FORMAT_ENV_KEYS = {
 # instead of a key (customapi).
 FORMATS_REQUIRING_KEY = (
     "openai",
+    "responses",
     "anthropic",
     "gemini",
     "qwen",
@@ -149,6 +154,7 @@ MODEL_OPTIONAL_FORMATS = ("codex",)
 # run by default, so `--api_format gemini` alone is a working command.
 DEFAULT_MODELS = {
     "openai": "gpt-5.6-luna",
+    "responses": "muse-spark-1.3-contributor-free",
     "gemini": "gemini-flash-latest",
     "qwen": "qwen-mt-turbo",
 }
@@ -184,7 +190,7 @@ def infer_api_format(api_base, model=""):
 
 # Endpoint paths people paste in along with the base. The SDKs build these
 # themselves, so a base carrying one produces /v1/chat/completions/chat/completions.
-_ENDPOINT_SUFFIXES = ("/chat/completions", "/messages", "/completions")
+_ENDPOINT_SUFFIXES = ("/chat/completions", "/responses", "/messages", "/completions")
 
 
 def normalize_api_base(api_base, api_format):
@@ -548,6 +554,7 @@ PROMPT_SECTIONS = ("user", "system", "style")
 # `$BBM_GEMINIAPI_SYS_MSG` previewed a grouping it would not do.
 PROMPT_ENV_VARS = (
     *CHATGPT_PROMPT_ENV_MAP.values(),
+    *RESPONSES_PROMPT_ENV_MAP.values(),
     *GEMINI_PROMPT_ENV_MAP.values(),
     # Deprecated; still read as a fallback by the openai family.
     "OPENAI_API_SYS_MSG",
@@ -802,6 +809,10 @@ def resolve_context_mode(options):
 # and grades one endpoint; every other route (anthropic, google, deepl, codex,
 # ...) has no such verdict to offer and stays in tag mode.
 PLAN_AUTO_FORMAT = "openai"
+# Wire formats whose probe verdict the plan may be built on. `responses`
+# speaks POST /responses with the same graded schema probe as the chat
+# route, so it plans on verdicts exactly like `openai` does.
+PLAN_AUTO_FORMATS = ("openai", "responses")
 
 # Probe verdicts a plan may be built on, and the line each one prints.
 # "strict" is the endpoint applying our schema; "shape" and "json" are
@@ -841,8 +852,8 @@ def resolve_plan_mode(
         return "none", f"plan mode needs an epub; this is a {book_type} book"
     if translate_tags_given:
         return "none", "--translate-tags names what to translate"
-    if api_format != PLAN_AUTO_FORMAT:
-        # Only the openai wire format is *entered* on a verdict. A route
+    if api_format not in PLAN_AUTO_FORMATS:
+        # Only the OpenAI wire formats are *entered* on a verdict. A route
         # without one used to end here; one that can hold a conversation now
         # gets asked in the way it can answer.
         if probe is not None and session:
@@ -936,7 +947,7 @@ def plan_mode_expected(facts):
         return True
     if not facts.plan_auto or facts.translate_tags_given:
         return False
-    if facts.api_format == PLAN_AUTO_FORMAT:
+    if facts.api_format in PLAN_AUTO_FORMATS:
         return True
     return _route_can_session_classify(facts.translate_model)
 
@@ -1179,7 +1190,7 @@ COMPAT_RULES = (
         and f.book_type == "epub"
         and not f.translate_tags_given
         and f.api_format in LLM_FORMATS
-        and f.api_format != PLAN_AUTO_FORMAT
+        and f.api_format not in PLAN_AUTO_FORMATS
         and not _route_can_session_classify(f.translate_model),
         lambda f: (
             f"the {f.api_format} route does not plan automatically: it "
@@ -1502,7 +1513,7 @@ def dry_run_plan_divergence(facts):
     if (
         facts.translate_tags_given
         or facts.options.plan_classify == "none"
-        or not (api_format == PLAN_AUTO_FORMAT or can_talk)
+        or not (api_format in PLAN_AUTO_FORMATS or can_talk)
     ):
         return (
             "this preview describes a plan-mode run. --translate-tags, "
@@ -1511,7 +1522,7 @@ def dry_run_plan_divergence(facts):
             "real run then translates the --translate-tags selection instead "
             "of this plan."
         )
-    if api_format == PLAN_AUTO_FORMAT:
+    if api_format in PLAN_AUTO_FORMATS:
         return None
     if translator is not None and hasattr(translator, "_probe_verdict"):
         # groq, xai, litellm: the OpenAI shape at another address, so the
