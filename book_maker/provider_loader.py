@@ -45,6 +45,7 @@ PLACEHOLDER_MARKER = "FILL-ME"
 API_STYLES = {
     "openai": "openai",
     "responses": "responses",
+    "opencode": "opencode",
     "anthropic": "anthropic",
     "claude": "anthropic",
     "gemini": "gemini",

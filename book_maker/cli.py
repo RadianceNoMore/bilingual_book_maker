@@ -147,7 +147,7 @@ LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal
 CONTEXT_AWARE_BOOK_TYPES = ("epub", "md", "markdown", "pdf")
 
 # LLM formats that can resolve a model on their own, so --model is optional.
-MODEL_OPTIONAL_FORMATS = ("codex",)
+MODEL_OPTIONAL_FORMATS = ("codex", "opencode")
 
 # The model a format falls back to when the command names none. The anthropic
 # format asks for an id; the other three name what their own route used to
@@ -155,6 +155,7 @@ MODEL_OPTIONAL_FORMATS = ("codex",)
 DEFAULT_MODELS = {
     "openai": "gpt-5.6-luna",
     "responses": "muse-spark-1.3-contributor-free",
+    "opencode": "opencode/mimo-v2.6-flash-free",
     "gemini": "gemini-flash-latest",
     "qwen": "qwen-mt-turbo",
 }

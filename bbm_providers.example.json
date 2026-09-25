@@ -57,17 +57,13 @@
       "env_key": "OPENROUTER_API_KEY"
     },
     "opencode": {
-      "api_style": "openai",
-      "base_url": "https://opencode.ai/inference/openai/v1",
+      "api_style": "opencode",
       "default_models": [
-        "mimo-v2.6-flash-free",
-        "ling-3.0-flash-fin-free",
-        "big-pickle",
-        "nemotron-3-ultra-free",
-        "nemotron-3.5-lightning-free",
-        "space-bunny-free"
-      ],
-      "env_key": "OPENCODE_API_KEY"
+        "opencode/mimo-v2.6-flash-free",
+        "opencode/ling-3.0-flash-fin-free",
+        "opencode/big-pickle",
+        "opencode/nemotron-3.5-lightning-free"
+      ]
     },
     "zen-responses": {
       "api_style": "responses",

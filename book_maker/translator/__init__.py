@@ -11,6 +11,7 @@ from book_maker.translator.groq_translator import GroqClient
 from book_maker.translator.litellm_translator import liteLLM
 from book_maker.translator.orcarouter_translator import OrcaRouterTranslator
 from book_maker.translator.qwen_translator import QwenTranslator
+from book_maker.translator.opencode_translator import OpenCodeTranslator
 from book_maker.translator.responses_translator import ResponsesTranslator
 from book_maker.translator.tencent_transmart_translator import TencentTranSmart
 from book_maker.translator.xai_translator import XAIClient
@@ -27,6 +28,9 @@ FORMAT_DICT = {
     # Not a wire format but a local sidecar: `codex app-server` drives the
     # user's ChatGPT subscription, so there is no endpoint or key to name.
     "codex": Codex,
+    # Local OpenCode CLI sidecar: drives local `opencode run` using free models
+    # with no API key or subscription needed.
+    "opencode": OpenCodeTranslator,
     # Two vendor protocols that are not the OpenAI shape and are not
     # reducible to it: Gemini's own SDK (native constrained decoding, its
     # own safety settings and chat history) and Qwen-MT, whose request
@@ -63,6 +67,7 @@ LLM_FORMATS = (
     "responses",
     "anthropic",
     "codex",
+    "opencode",
     "gemini",
     "qwen",
     "groq",
