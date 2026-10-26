@@ -152,7 +152,7 @@ class TestUnknownProvider:
         message = str(err.value)
         assert "ghost" in message
         assert "bbm_providers.json" in message
-        assert ".bbm/providers.json" in message
+        assert ".bbm/providers.json" in message.replace("\\", "/")
         # and says what it did find, so a typo is obvious
         assert "deepseek" in message
 

@@ -320,7 +320,7 @@ class PDFBookLoader(BaseBookLoader):
             book.add_item(epub.EpubNav())
 
             out_path = f"{Path(self.pdf_name).parent}/{Path(self.pdf_name).stem}_bilingual.epub"
-            epub.write_epub(out_path, book)
+            epub.write_epub(self.output_path(out_path), book)
             return True
         except Exception as e:
             print(f"create epub failed: {e}")
@@ -348,6 +348,7 @@ class PDFBookLoader(BaseBookLoader):
                 Path(self.pdf_name).parent
                 / f"{Path(self.pdf_name).stem}_bilingual_{layout}.pdf"
             )
+            out_path = Path(self.output_path(out_path))
             if create_bilingual_pdf(pairs, out_path, Path(self.pdf_name).stem, layout):
                 print(f"created pdf: {out_path.name}")
 

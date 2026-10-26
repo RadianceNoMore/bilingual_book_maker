@@ -58,11 +58,8 @@ class BatchMismatch(Exception):
 
     The one contract every LLM route's `translate_list` keeps: exactly
     `len(texts)` aligned items, or this. Nobody repairs it where it is
-    raised — the loader's `_translate_texts_aligned` ladder halves the chunk
-    and asks again, which costs about twice the batch instead of the N
-    single requests a per-route fallback used to pay. Retrying the same
-    group is not among the options either: a model that miscounted once
-    usually miscounts again, and each retry re-pays the whole group.
+    raised — the loader retries the same complete chunk. Individual
+    paragraph retries require the operator's explicit opt-in.
     """
 
 

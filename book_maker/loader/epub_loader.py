@@ -6,6 +6,7 @@ import os
 import pickle
 import re
 import shlex
+import shutil
 import string
 import sys
 import time
@@ -26,7 +27,16 @@ from rich.markup import escape
 from tqdm import tqdm
 
 from book_maker import translation_metadata as tmeta
+from .epub_localization import (
+    bilingual as localized_label,
+    collect_titles,
+    set_dc_values,
+    sync_documents,
+)
 from book_maker.redaction import redact
+from book_maker.obfuscated_codes import RULE_VERSION, code_spans, strip_codes, clean_document
+from book_maker.translation_quality import untranslated_reason, validate_translation_texts, UntranslatedTextError
+from book_maker.translator.base_translator import Base, BatchMismatch
 from book_maker.session_context import handoff_path
 from book_maker.utils import (
     language_code,
@@ -95,7 +105,6 @@ from .markers import (
     reconcile_markers,
     split_on_markers,
 )
-from ..translator.base_translator import BatchMismatch
 from .classify import (
     PlanClassifyError,
     PlanUnresolvedError,
@@ -237,6 +246,9 @@ class ChapterTranslationPlan:
     item: object
     soup: object
     jobs: list[TranslationJob]
+    selected: bool = True
+    navigation_labels: list[str] = field(default_factory=list)
+    localized_heading_nodes: set[int] = field(default_factory=set, repr=False)
 
 
 def check_file_filters_against(book, only_filelist, exclude_filelist):
@@ -271,7 +283,7 @@ class EPUBBookLoader(BaseBookLoader):
     # what `lang=` may carry for the target language; None stamps nothing
     language_tag = None
 
-    CHECKPOINT_VERSION = 3
+    CHECKPOINT_VERSION = 4
     CHECKPOINT_ORDER = "document"
 
     def __init__(
@@ -310,6 +322,8 @@ class EPUBBookLoader(BaseBookLoader):
 
         self.epub_name = epub_name
         self.language = language
+        self.source_lang = source_lang
+        self.strip_obfuscated_codes = True
         # Whether the output says it is a machine translation. Dropping
         # calibre's record of its own file is not covered by this: that is
         # a false statement about the file, not a disclosure.
@@ -350,6 +364,13 @@ class EPUBBookLoader(BaseBookLoader):
         # asked for no grouping" and "the user said nothing", and plan mode's
         # session default (below) has to tell those apart.
         self.accumulated_num_given = False
+        self.accumulate_across_chapters = False
+        self.whole_chapter = False
+        self.retry_one_by_one = False
+        self.translate_metadata = True
+        self._localized_cache = {}
+        self._toc_job_translations = {}
+        self._parallel_translations = {}
         # session mode's history is re-read at the endpoint's cache rate, so
         # requests are what a run pays for; the loader needs to know which
         # mode it is in to default the plan budget accordingly.
@@ -914,7 +935,13 @@ class EPUBBookLoader(BaseBookLoader):
         obfuscation is put back on the bytes afterwards. `_stamp_disclosure`
         is idempotent, so a book written twice is credited once.
         """
+        path = self.output_path(path)
         self._stamp_disclosure(book)
+        if getattr(self, "strip_obfuscated_codes", True):
+            for item in book.get_items_of_type(ITEM_DOCUMENT):
+                soup = bs(item.content, "html.parser")
+                if clean_document(soup):
+                    item.content = soup.encode("utf-8")
         epub.write_epub(path, book, {})
         self._reobfuscate_written(path)
 
@@ -1374,7 +1401,7 @@ class EPUBBookLoader(BaseBookLoader):
         # moment both kinds of run share, before a request has been made and
         # so before anything the endpoint says can move the answer.
         self._run_fingerprint()
-        if not self.resume or not self.p_to_save:
+        if not self.resume or not (self.p_to_save or getattr(self, "_localized_cache", {})):
             return
         if self._resume_run_fingerprint is None:
             print(
@@ -2349,50 +2376,83 @@ class EPUBBookLoader(BaseBookLoader):
             # hold references into this subtree
             element.extract()
 
-    def _translate_texts_aligned(self, texts, translator=None, units=None):
-        """translate_list with an alignment ladder: group -> halves -> singles.
+    def _translate_texts_aligned(
+        self, texts, translator=None, units=None, batch_function=None,
+        retry_one_by_one=None,
+    ):
+        # Preserve slot count and original job identities, including code-only
+        # slots. Empty cleaned slots never reach the model or its history.
+        if getattr(self, "strip_obfuscated_codes", True):
+            cleaned = [strip_codes(text) for text in texts]
+            if cleaned != texts:
+                active = [i for i, text in enumerate(cleaned) if text.strip()]
+                subset = [cleaned[i] for i in active]
+                subset_units = [units[i] for i in active] if units is not None else None
+                result = self._translate_cleaned_texts_aligned(
+                    subset, translator, subset_units, batch_function, retry_one_by_one
+                )
+                restored = [""] * len(texts)
+                for i, value in zip(active, result):
+                    restored[i] = value
+                return restored
+        return self._translate_cleaned_texts_aligned(
+            texts, translator, units, batch_function, retry_one_by_one
+        )
 
-        The one fallback in the system. Every LLM route's `translate_list`
-        returns exactly `len(texts)` aligned items or raises `BatchMismatch`;
-        none of them repairs a bad reply itself any more, and none retries
-        the same group (a model that miscounted once usually miscounts
-        again, and each retry re-pays the whole group). Halving costs about
-        twice the batch — 8 + 4 + 2 + 1 + 1 — where a per-line fallback paid
-        8 singles on top of the batch.
+    def _translate_cleaned_texts_aligned(
+        self, texts, translator=None, units=None, batch_function=None,
+        retry_one_by_one=None,
+    ):
+        translator = translator or self.translate_model
 
-        `translator` defaults to the shared model; parallel chapters pass
-        their own clone so --use_context stays chapter-local.
+        def attempt():
+            result = self._translate_texts_attempt(texts, translator, units, batch_function)
+            if getattr(self, "strip_obfuscated_codes", True):
+                result = [strip_codes(value) for value in result]
+            return result
 
-        `units` (plan mode) is the Unit behind each text, in the same order.
-        It is what lets a reply whose *count* is right but whose slots are
-        shifted be caught — see `_marker_slot_mismatch`. `_numeric_slot_shift`
-        catches the same fault from the numbers alone, so it needs no units
-        and covers tag mode and every reply shape (schema, delimiter, plain)
-        that comes back through this ladder.
+        return translate_list_or_singles(
+            translator, texts,
+            attempt=attempt,
+            retry_one_by_one=(
+                getattr(self, "retry_one_by_one", False)
+                if retry_one_by_one is None else retry_one_by_one
+            ),
+            language=getattr(self, "language", None) or getattr(self, "language_tag", None),
+            source_language=getattr(self, "source_lang", None),
+        )
+
+    def _translate_texts_attempt(
+        self, texts, translator=None, units=None, batch_function=None
+    ):
+        """One attempt, including count, marker, and numeric alignment checks.
+
+        Parallel chapters pass a translator clone with independent context.
+        The outer policy retries the same texts after any alignment failure.
         """
         if not texts:
             return []
         translator = translator or self.translate_model
         try:
-            # A chunk of one is not a batch: it goes through `translate`,
-            # which is the bottom of the ladder and the only rung with
-            # nothing left to divide.
+            # A one-unit chunk uses the single-text request format.
             result = (
                 [translator.translate(texts[0])]
                 if len(texts) == 1
-                else translator.translate_list(texts)
+                else (
+                    batch_function(texts)
+                    if batch_function is not None
+                    else translator.translate_list(texts)
+                )
             )
         except BatchMismatch as e:
-            # Not an error: the contract working. Say what happened once,
-            # then divide.
             print(
                 f"[yellow]batch of {len(texts)} came back misaligned "
-                f"({e}); splitting[/yellow]"
+                f"({e})[/yellow]"
             )
             self._note_misalign_recovery()
-            return self._divide_and_translate(texts, translator, units)
+            raise
         except Exception as e:
-            if translator._fatal_error_detected:
+            if getattr(translator, "_fatal_error_detected", False):
                 # a clone's fatal flag must reach the shared model, or the
                 # other workers keep firing at an endpoint already known dead
                 self.translate_model._fatal_error_detected = True
@@ -2404,11 +2464,13 @@ class EPUBBookLoader(BaseBookLoader):
                 return [translator.TRANSLATION_ERROR_MARKER] * len(texts)
             print(f"[bold red]Translation error: {str(e)}[/bold red]")
             raise
-        if translator._fatal_error_detected:
+        if getattr(translator, "_fatal_error_detected", False):
             # some translators (gemini) mark fatal and return error markers
             # instead of raising — the flag must still reach the shared
             # model, or a clone's death stays invisible to other workers
             self.translate_model._fatal_error_detected = True
+        if not isinstance(result, (list, tuple)):
+            raise BatchMismatch("chunk translation did not return a list")
         if len(result) == len(texts):
             evidence = self._marker_slot_mismatch(
                 texts, result, units
@@ -2419,19 +2481,19 @@ class EPUBBookLoader(BaseBookLoader):
             # nothing else in the run would have noticed.
             print(
                 f"[bold red]batch of {len(texts)} came back shifted "
-                f"({evidence}) — splitting for realignment[/bold red]"
+                f"({evidence})[/bold red]"
             )
             self._note_misalign_recovery()
-            return self._divide_and_translate(texts, translator, units)
+            raise BatchMismatch(evidence)
         # A belt for routes that still answer with the wrong count instead of
         # raising — the MT engines translate one by one and cannot, but a
         # gateway wrapper might.
         print(
             f"[bold red]alignment mismatch: sent {len(texts)} paragraphs, "
-            f"received {len(result)} — splitting for realignment[/bold red]"
+            f"received {len(result)}[/bold red]"
         )
         self._note_misalign_recovery()
-        return self._divide_and_translate(texts, translator, units)
+        raise BatchMismatch(f"sent {len(texts)} paragraphs, received {len(result)}")
 
     @staticmethod
     def _marker_slot_mismatch(texts, result, units):
@@ -2574,7 +2636,7 @@ class EPUBBookLoader(BaseBookLoader):
         return None
 
     def _note_misalign_recovery(self):
-        """Every split retries; a run that splits often is telling the
+        """A run that retries often is telling the
         operator its batches are too big for this model."""
         count = getattr(self, "_misalign_recoveries", 0) + 1
         self._misalign_recoveries = count
@@ -2584,27 +2646,6 @@ class EPUBBookLoader(BaseBookLoader):
                 f"keeps happening, a lower --max-batch-units or "
                 f"--accumulated_num may fit this model better[/yellow]"
             )
-
-    def _divide_and_translate(self, texts, translator, units=None):
-        """Halve a chunk that came back misaligned; a chunk of 1 translates alone.
-
-        `units` rides along so each half is checked for a shift the same way
-        the whole chunk was — the ladder's own retry misaligned in the
-        measured case, which is how the fault reached the book.
-        """
-        if len(texts) == 1:
-            t = translator.translate(texts[0])
-            if t is None:
-                raise RuntimeError(
-                    "`t_text` is None: your translation model is not working as expected."
-                )
-            return [t]
-        mid = len(texts) // 2
-        left = units[:mid] if units else None
-        right = units[mid:] if units else None
-        return self._translate_texts_aligned(
-            texts[:mid], translator, left
-        ) + self._translate_texts_aligned(texts[mid:], translator, right)
 
     def _insert_trans_preserving_tags(
         self, p, translated_text, translation_style="", single_translate=False
@@ -2616,6 +2657,17 @@ class EPUBBookLoader(BaseBookLoader):
         """
         if translated_text is None:
             translated_text = ""
+
+        if getattr(self, "strip_obfuscated_codes", True) and not translated_text.strip():
+            original = p.get_text()
+            if code_spans(original) and not strip_codes(original).strip():
+                if not p.find(["img", "svg", "audio", "video", "code", "pre", "br"]):
+                    if p.get("id") or p.find(attrs={"id": True}):
+                        for text_node in list(p.find_all(string=True)):
+                            text_node.replace_with("")
+                    else:
+                        p.decompose()
+                    return
 
         # Skip insertion if translation failed
         if (
@@ -2727,7 +2779,7 @@ class EPUBBookLoader(BaseBookLoader):
             elif self.batch_use_flag:
                 t_text = self.translate_model.batch_translate(index)
             else:
-                t_text = self.translate_model.translate(new_p.text)
+                t_text = self._translate_texts_aligned([new_p.text])[0]
             if t_text is None:
                 raise RuntimeError(
                     "`t_text` is None: your translation model is not working as expected. Please check your translation model configuration."
@@ -2936,7 +2988,8 @@ class EPUBBookLoader(BaseBookLoader):
                     self.translation_style,
                     single_translate,
                 )
-                self.p_to_save.append(t)
+                if hasattr(self, "p_to_save"):
+                    self.p_to_save.append(t)
         wait_p_list.clear()
         try:
             self._save_progress()
@@ -2946,7 +2999,7 @@ class EPUBBookLoader(BaseBookLoader):
     def _deal_new_acc(self, p, wait_p_list, single_translate):
         """Helper for translate_paragraphs_acc - process single paragraph."""
         self._deal_old_acc(wait_p_list, single_translate)
-        translation = self.translate_model.translate(p.text)
+        translation = self._translate_texts_aligned([p.text])[0]
         self._insert_trans_preserving_tags(
             p,
             translation,
@@ -2978,7 +3031,9 @@ class EPUBBookLoader(BaseBookLoader):
             return False
 
         try:
-            translated_sentences = self.translate_model.translate_list(sentences)
+            translated_sentences = self._translate_texts_aligned(sentences)
+        except UntranslatedTextError:
+            raise
         except Exception as e:
             print(f"[bold red]Sentence translation error: {e}[/bold red]")
             return False
@@ -3299,6 +3354,8 @@ class EPUBBookLoader(BaseBookLoader):
                 batch_indexes = self._assign_batch_indexes(source_texts)
                 units = [None] * len(nodes)
 
+            if self.whole_chapter:
+                batch_indexes = [0] * len(nodes)
             first_global_index = global_index - len(nodes)
             jobs = []
             for node_index, (node, source_text, batch_index, unit) in enumerate(
@@ -3324,7 +3381,14 @@ class EPUBBookLoader(BaseBookLoader):
                     )
                 )
 
-            plans.append(ChapterTranslationPlan(item=item, soup=soup, jobs=jobs))
+            plans.append(ChapterTranslationPlan(
+                item=item, soup=soup, jobs=jobs, selected=should_translate,
+                navigation_labels=[
+                    node.get_text(" ", strip=True)
+                    for node in soup.select("nav h2, nav li > span")
+                    if node.get_text(" ", strip=True) and not node.find("a")
+                ] if isinstance(item, epub.EpubNav) else [],
+            ))
 
         return plans
 
@@ -3510,6 +3574,22 @@ class EPUBBookLoader(BaseBookLoader):
             if len(self.p_to_save) // 20 > self._last_saved_progress // 20:
                 self._save_progress()
 
+    def _apply_approved_toc_job(self, job):
+        """Write a pretranslated TOC title into its matching body heading."""
+        value = self._toc_job_translations.get(job.job_id)
+        if value is None:
+            return False
+        self._record_translation_result(job.global_index, value)
+        if job.unit is not None:
+            self._insert_plan_translation(
+                job.unit, value, self.translation_style, self.single_translate
+            )
+        else:
+            self._insert_trans_preserving_tags(
+                job.node, value, self.translation_style, self.single_translate
+            )
+        return True
+
     def _process_chapter_parallel(self, chapter_data):
         """Process a single chapter in parallel mode with proper accumulated_num handling."""
         chapter_plan, p_to_save_len = chapter_data
@@ -3537,6 +3617,8 @@ class EPUBBookLoader(BaseBookLoader):
                     fresh = []
                     for job in chunk:
                         idx = job.global_index
+                        if self._apply_approved_toc_job(job):
+                            continue
                         if (
                             self.resume
                             and idx < p_to_save_len
@@ -3574,19 +3656,28 @@ class EPUBBookLoader(BaseBookLoader):
 
             send_num = self.accumulated_num
             if send_num > 1:
+                body_jobs = [
+                    job for job in chapter_plan.jobs
+                    if job.job_id not in self._toc_job_translations
+                ]
                 self._translate_paragraphs_acc_parallel(
-                    [job.node for job in chapter_plan.jobs],
+                    [job.node for job in body_jobs],
                     send_num,
                     thread_translator,
                     chapter_context_list,
                     chapter_translated_list,
+                    jobs=body_jobs,
                 )
+                for job in chapter_plan.jobs:
+                    self._apply_approved_toc_job(job)
             else:
                 # Process paragraphs individually for this chapter
                 for job in chapter_plan.jobs:
                     p = job.node
                     index = job.global_index
 
+                    if self._apply_approved_toc_job(job):
+                        continue
                     if (
                         self.resume
                         and index < p_to_save_len
@@ -3665,7 +3756,7 @@ class EPUBBookLoader(BaseBookLoader):
     ):
         """Translate text with chapter-specific context management."""
         if not translator.context_flag:
-            return translator.translate(text)
+            return self._translate_texts_aligned([text], translator)[0]
 
         # Temporarily replace global context with chapter context
         original_context = getattr(translator, "context_list", [])
@@ -3677,7 +3768,7 @@ class EPUBBookLoader(BaseBookLoader):
             translator.context_translated_list = chapter_translated_list.copy()
 
             # Perform translation
-            result = translator.translate(text)
+            result = self._translate_texts_aligned([text], translator)[0]
 
             # Update chapter context
             chapter_context_list[:] = translator.context_list
@@ -3697,10 +3788,18 @@ class EPUBBookLoader(BaseBookLoader):
         translator,
         chapter_context_list,
         chapter_translated_list,
+        jobs=None,
     ):
         """Apply accumulated_num logic for a single chapter in parallel mode with independent context."""
         count = 0
         wait_p_list = []
+        job_by_node = {id(job.node): job for job in (jobs or ())}
+
+        def record(node, translation):
+            job = job_by_node.get(id(node))
+            if job is not None:
+                with self._progress_lock:
+                    self._parallel_translations[job.job_id] = translation
 
         # Create chapter-specific helper instance with context-aware translation
         class ChapterHelper:
@@ -3755,6 +3854,7 @@ class EPUBBookLoader(BaseBookLoader):
                                 self.parent_loader.translation_style,
                                 single_translate,
                             )
+                            record(p, shorter_result_link(result_txt_list[i]))
 
                 finally:
                     # Restore original context
@@ -3772,6 +3872,7 @@ class EPUBBookLoader(BaseBookLoader):
                     self.parent_loader.translation_style,
                     single_translate,
                 )
+                record(p, translation)
 
         chapter_helper = ChapterHelper(
             self, translator, chapter_context_list, chapter_translated_list
@@ -3835,11 +3936,473 @@ class EPUBBookLoader(BaseBookLoader):
                     if time.time() - start_time > 300:  # 5 minutes
                         raise Exception("Batch translation timed out after 5 minutes")
 
+    @staticmethod
+    def _title_cache_key(key, source):
+        return f"toc:{key[0]}#{key[1]}:{source}"
+
+    @staticmethod
+    def _same_title_text(left, right):
+        return " ".join((left or "").split()).casefold() == " ".join(
+            (right or "").split()
+        ).casefold()
+
+    def _translate_toc_batch(self, chapter_plans, title_records):
+        """Translate all selected EPUB navigation labels together before prose."""
+        self._toc_job_translations = {}
+        if not self.translate_metadata or self.is_test:
+            return {}
+
+        plans_by_file = {plan.item.file_name: plan for plan in chapter_plans}
+        targets = []
+        job_cache_keys = {}
+        for _entry, key, source, node, job in title_records:
+            plan = plans_by_file.get(key[0])
+            if plan is None or not plan.selected:
+                continue
+            if self._plan_mode and node is not None and job is None:
+                continue
+            cache_key = self._title_cache_key(key, source)
+            targets.append((cache_key, source))
+            if job is not None and self._same_title_text(job.source_text, source):
+                job_cache_keys[job.job_id] = cache_key
+
+        # EPUB 3 nav documents can carry section labels absent from the NCX.
+        # Include them in the same request and reuse duplicate source labels.
+        for plan in chapter_plans:
+            if plan.selected:
+                targets.extend(
+                    (f"nav:{source}", source)
+                    for source in plan.navigation_labels
+                    if not self._plan_mode
+                    or any(
+                        self._same_title_text(job.source_text, source)
+                        for job in plan.jobs
+                    )
+                )
+
+        unique_targets = {}
+        for cache_key, source in targets:
+            unique_targets.setdefault(cache_key, source)
+
+        source_values = {}
+        for cache_key, source in unique_targets.items():
+            cached = self._localized_cache.get(cache_key)
+            if cached is None:
+                continue
+            try:
+                validate_translation_texts(
+                    [source], [cached], self.language, self.source_lang
+                )
+            except UntranslatedTextError as error:
+                raise UntranslatedTextError(
+                    f"Cached EPUB label {cache_key!r}: {error}"
+                ) from error
+            source_values.setdefault(source, cached)
+
+        pending_sources = []
+        for source in unique_targets.values():
+            if source not in source_values and source not in pending_sources:
+                pending_sources.append(source)
+        if pending_sources:
+            translator = self.translate_model
+            batch_function = None
+            if (
+                getattr(type(translator), "translate_list", None)
+                is Base.translate_list
+            ):
+                # The base implementation loops over labels. Use its
+                # delimiter batch rung here so the complete TOC remains one
+                # provider request on routes without a structured override.
+                batch_function = lambda texts: translator._do_batch_translate(
+                    texts,
+                    getattr(translator, "prompt_template", None),
+                    getattr(translator, "prompt_sys_msg", None),
+                    getattr(translator, "DEFAULT_PROMPT", ""),
+                    lambda text: translator.translate(text),
+                )
+            try:
+                translated = self._translate_texts_aligned(
+                    pending_sources,
+                    batch_function=batch_function,
+                    retry_one_by_one=False,
+                )
+            except UntranslatedTextError as error:
+                files = sorted(
+                    {
+                        key[0]
+                        for _entry, key, _source, _node, _job in title_records
+                        if key[0] in plans_by_file
+                        and plans_by_file[key[0]].selected
+                    }
+                )
+                shown = ", ".join(files[:4])
+                if len(files) > 4:
+                    shown += f", and {len(files) - 4} more"
+                raise UntranslatedTextError(
+                    f"EPUB TOC/navigation batch for {shown or 'selected documents'}: {error}"
+                ) from error
+            if len(translated) != len(pending_sources):
+                raise ValueError("TOC translation returned the wrong number of labels")
+            marker = self.translate_model.TRANSLATION_ERROR_MARKER
+            if self.translate_model._fatal_error_detected or (
+                marker is not None and marker in translated
+            ):
+                raise ValueError("TOC translation failed; progress was saved")
+            source_values.update(zip(pending_sources, translated))
+
+        changed = False
+        for cache_key, source in unique_targets.items():
+            value = source_values[source]
+            if self._localized_cache.get(cache_key) != value:
+                self._localized_cache[cache_key] = value
+                changed = True
+
+        jobs_by_id = {
+            record[4].job_id: record[4]
+            for record in title_records
+            if record[4] is not None
+        }
+        for job_id, cache_key in job_cache_keys.items():
+            value = self._localized_cache[cache_key]
+            self._toc_job_translations[job_id] = value
+            job = jobs_by_id[job_id]
+            if job.global_index < len(self.p_to_save):
+                if self.p_to_save[job.global_index] != value:
+                    self.p_to_save[job.global_index] = value
+                    changed = True
+
+        if changed:
+            self._save_progress()
+        return self._toc_job_translations
+
+    def _process_accumulated_stream(self, chapter_plans, pbar):
+        """Translate body jobs and reuse approved TOC translations for headings."""
+
+        if self._plan_mode:
+            request_budget = self._plan_request_budget() or self._plan_token_budget
+        else:
+            request_budget = self.accumulated_num
+        request_cap = self._plan_request_cap() if self._plan_mode else None
+        if self.whole_chapter:
+            request_budget = float("inf")
+            request_cap = None
+        pending = []
+        tokens = 0
+
+        def flush():
+            nonlocal pending, tokens
+            if not pending:
+                return
+            fresh = [
+                task
+                for task in pending
+                if task[0].global_index >= len(self.p_to_save)
+            ]
+            units = [task[0].unit for task in fresh] if self._plan_mode else None
+            try:
+                translated = self._translate_texts_aligned(
+                    [task[1] for task in fresh], units=units
+                )
+            except UntranslatedTextError as error:
+                files = sorted({task[0].context_group for task in pending})
+                raise UntranslatedTextError(f"{', '.join(files)}: {error}") from error
+            marker = self.translate_model.TRANSLATION_ERROR_MARKER
+            if self.translate_model._fatal_error_detected or (
+                marker is not None and marker in translated
+            ):
+                raise ValueError("EPUB batch translation failed; progress was saved")
+            results = iter(translated)
+            for job, _source in pending:
+                if job.global_index < len(self.p_to_save):
+                    value = self.p_to_save[job.global_index]
+                else:
+                    if job.global_index != len(self.p_to_save):
+                        raise ValueError("Cross-chapter translation jobs lost their order")
+                    value = next(results)
+                    self.p_to_save.append(value)
+                if job.unit is not None:
+                    self._insert_plan_translation(
+                        job.unit, value, self.translation_style, self.single_translate
+                    )
+                else:
+                    self._insert_trans_preserving_tags(
+                        job.node, value, self.translation_style, self.single_translate
+                    )
+                pbar.update(1)
+            self._save_progress()
+            pending, tokens = [], 0
+
+        for plan in chapter_plans:
+            for job in plan.jobs:
+                if job.job_id in self._toc_job_translations:
+                    flush()
+                    if not self._apply_approved_toc_job(job):
+                        raise ValueError("Approved TOC title disappeared during translation")
+                    pbar.update(1)
+                    self._save_progress()
+                    continue
+                task = (job, job.source_text)
+                length = num_tokens_from_text(task[1])
+                if pending and (
+                    tokens + length > request_budget
+                    or (request_cap is not None and len(pending) >= request_cap)
+                ):
+                    flush()
+                pending.append(task)
+                tokens += length
+                if length > request_budget:
+                    flush()
+            if not self.accumulate_across_chapters:
+                flush()
+        flush()
+        for plan in chapter_plans:
+            if plan.jobs:
+                plan.item.content = plan.soup.encode("utf-8")
+
+    def _cached_localization(self, cache_key, source):
+        fresh = cache_key not in self._localized_cache
+        value = (
+            self._translate_texts_aligned([source])[0]
+            if fresh else self._localized_cache[cache_key]
+        )
+        marker = self.translate_model.TRANSLATION_ERROR_MARKER
+        if not isinstance(value, str) or not value.strip() or (marker is not None and value == marker):
+            raise ValueError(f"Could not translate EPUB title or metadata: {source[:80]}")
+        validate_translation_texts(
+            [source], [value], self.language, self.source_lang
+        )
+        if fresh:
+            self._localized_cache[cache_key] = value
+            self._save_progress()
+        return value
+
+    def _completed_translation(self, job):
+        if job.global_index < len(self.p_to_save):
+            return self.p_to_save[job.global_index]
+        return self._parallel_translations.get(job.job_id)
+
+    def _validate_completed_translations(self, chapter_plans):
+        """Cached replies and paths bypassing batch validation must pass too."""
+        for plan in chapter_plans:
+            for job in plan.jobs:
+                value = self._completed_translation(job)
+                source = job.source_text
+                if getattr(self, "strip_obfuscated_codes", True):
+                    source, value = strip_codes(source), strip_codes(value)
+                reason = untranslated_reason(
+                    source, value, self.language, getattr(self, "source_lang", None)
+                )
+                if reason:
+                    raise UntranslatedTextError(
+                        f"{plan.item.file_name}, unit {job.node_index + 1}: {reason}. "
+                        "Refusing to publish a finished book; the checkpoint is preserved."
+                    )
+
+    def _prepare_obfuscated_codes(self, chapter_plans):
+        """Migrate affected cached slots without changing their identities."""
+        if not getattr(self, "strip_obfuscated_codes", True):
+            return
+        for plan in chapter_plans:
+            repair_batches = set()
+            for job in plan.jobs:
+                spans = code_spans(job.source_text)
+                if not spans:
+                    continue
+                for start, end in spans:
+                    print(escape(
+                        f"Removed obfuscated contact code: {plan.item.file_name}, "
+                        f"unit {job.node_index + 1}: {job.source_text[start:end]}"
+                    ))
+                if job.global_index >= len(self.p_to_save):
+                    continue
+                source = strip_codes(job.source_text)
+                value = strip_codes(self.p_to_save[job.global_index]) if source.strip() else ""
+                reason = untranslated_reason(source, value, self.language, self.source_lang)
+                if source.strip() and (not isinstance(value, str) or not value.strip() or reason):
+                    repair_batches.add(job.batch_index)
+                else:
+                    self.p_to_save[job.global_index] = value
+            # Revalidate a suspect cached mixed paragraph by retranslating its
+            # whole chunk, keeping all other cached chunks intact.
+            for batch_index in sorted(repair_batches):
+                jobs = [job for job in plan.jobs if job.batch_index == batch_index
+                        and job.global_index < len(self.p_to_save)]
+                values = self._translate_texts_aligned(
+                    [job.source_text for job in jobs],
+                    units=[job.unit for job in jobs] if self._plan_mode else None,
+                )
+                for job, value in zip(jobs, values):
+                    if job.global_index < len(self.p_to_save):
+                        self.p_to_save[job.global_index] = value
+
+    def _localize_book(self, book, chapter_plans, title_records, allow_requests=True):
+        """Apply translated headings and OPF metadata before EPUB serialization."""
+        translated_titles = {}
+        translated_labels = {}
+        plans_by_file = {plan.item.file_name: plan for plan in chapter_plans}
+        active_files = {plan.item.file_name for plan in chapter_plans if plan.selected}
+        source_title_page = None
+        for plan in chapter_plans:
+            if "title-page" in plan.item.file_name.lower():
+                source_title_page = plan
+                break
+        for entry, key, source, node, job in title_records:
+            if key[0] not in active_files:
+                continue
+            if self._plan_mode and node is not None and job is None:
+                continue
+            cache_key = self._title_cache_key(key, source)
+            value = self._localized_cache.get(cache_key)
+            if value is None and job is not None and self._same_title_text(
+                job.source_text, source
+            ):
+                # Older interrupted runs may have body progress but no TOC
+                # cache yet; use it only for recovery output.
+                value = self._completed_translation(job)
+            if value is None and allow_requests:
+                value = self._cached_localization(cache_key, source)
+            if not value:
+                continue
+            # A title omitted by --translate-tags is still part of the
+            # chapter title work. Keep its visible heading in sync when it
+            # has exactly the same source wording as the navigation label.
+            plan = plans_by_file[key[0]]
+            if (
+                job is None and node is not None and node.parent is not None
+                and self._same_title_text(node.get_text(" ", strip=True), source)
+                and id(node) not in plan.localized_heading_nodes
+            ):
+                self._insert_trans_preserving_tags(
+                    node, value, self.translation_style, self.single_translate
+                )
+                plan.localized_heading_nodes.add(id(node))
+                plan.item.content = plan.soup.encode("utf-8")
+            entry.title = localized_label(source, value, self.single_translate)
+            translated_titles.setdefault(key, (source, value))
+            translated_labels[(key, source)] = value
+
+        dc_translations = {}
+        for name in ("title", "description", "subject"):
+            for index, (source, _attrs) in enumerate(
+                self.origin_book.get_metadata("DC", name)
+            ):
+                source = (source or "").strip()
+                if not source:
+                    continue
+                value = None
+                # Body and OPF title-page text often hold the same synopsis.
+                # Reuse an exact source match rather than paying for a second
+                # translation that may choose different names or wording.
+                if name == "title":
+                    value = next(
+                        (
+                            translated
+                            for original, translated in translated_titles.values()
+                            if self._same_title_text(original, source)
+                        ),
+                        None,
+                    )
+                if name in ("title", "description") and value is None:
+                    plans = [source_title_page] if source_title_page else chapter_plans
+                    for plan in plans:
+                        if plan is None:
+                            continue
+                        matches = [
+                            job
+                            for job in plan.jobs
+                            if self._same_title_text(job.source_text, source)
+                            and self._completed_translation(job) is not None
+                        ]
+                        if matches:
+                            value = self._completed_translation(matches[0])
+                            break
+                if value is None:
+                    cache_key = f"dc:{name}:{index}:{source}"
+                    value = (
+                        self._cached_localization(cache_key, source)
+                        if allow_requests else self._localized_cache.get(cache_key)
+                    )
+                if value:
+                    dc_translations[(name, index)] = value
+            set_dc_values(book, name, dc_translations, self.single_translate)
+        nav_labels = {}
+        for plan in chapter_plans:
+            if not plan.selected:
+                continue
+            for source in plan.navigation_labels:
+                key = (plan.item.file_name, source)
+                if key in nav_labels:
+                    continue
+                matching = next(
+                    (
+                        job
+                        for job in plan.jobs
+                        if self._same_title_text(job.source_text, source)
+                        and self._completed_translation(job) is not None
+                    ),
+                    None,
+                )
+                if self._plan_mode and matching is None:
+                    continue
+                nav_cache_key = f"nav:{source}"
+                if nav_cache_key in self._localized_cache:
+                    nav_labels[key] = self._localized_cache[nav_cache_key]
+                    continue
+                if (
+                    not allow_requests
+                    and matching is None
+                    and f"nav:{source}" not in self._localized_cache
+                ):
+                    continue
+                if matching:
+                    nav_labels[key] = self._completed_translation(matching)
+                elif allow_requests:
+                    nav_labels[key] = self._cached_localization(
+                        f"nav:{source}", source
+                    )
+                else:
+                    nav_labels[key] = self._localized_cache[f"nav:{source}"]
+        translated_files = {
+            plan.item.file_name for plan in chapter_plans
+            if plan.selected
+            and all(self._completed_translation(job) is not None for job in plan.jobs)
+            and (plan.jobs or any(key[0] == plan.item.file_name for key in translated_titles))
+        }
+        sync_documents(
+            book, translated_titles, self.single_translate, self.language_tag,
+            nav_labels, translated_files, translated_labels,
+        )
+
+    def _write_partial_recovery(self, book, chapter_plans, title_records):
+        """Fallback when replaying the complete checkpoint cannot be written."""
+        if self.translate_metadata and not self.is_test:
+            self._localize_book(
+                book, chapter_plans, title_records, allow_requests=False
+            )
+        name, _ = os.path.splitext(self.epub_name)
+        path = self.output_path(f"{name}_bilingual_temp.epub")
+        self._write_book(path, book)
+        print(f"[bold green]Saved recovery book: {path}[/bold green]")
+
     def make_bilingual_book(self):
+        if (
+            self.resume
+            and (self.p_to_save or self._localized_cache)
+            and getattr(self, "_resume_cross_chapters", False)
+            != self.accumulate_across_chapters
+            and not self.whole_chapter
+        ):
+            raise ValueError(
+                "The checkpoint's cross-chapter setting changed; restart the translation"
+            )
         # Before the plan is built and before anything is translated: a
         # checkpoint written into another language (or under another prompt,
         # or by another model) is not this run's to continue.
         self._check_resume_run_fingerprint()
+        if (self.resume and self.p_to_save
+                and getattr(self, "_resume_code_cleanup", None)
+                and not getattr(self, "strip_obfuscated_codes", True)):
+            raise ValueError("This checkpoint has contact-code cleanup enabled; resume with --strip-obfuscated-codes on")
         # And after it, never before: the fingerprint is what says this
         # checkpoint is this run's to continue, so a handoff left beside the
         # book must not seed anything until that has been agreed.
@@ -3878,7 +4441,19 @@ class EPUBBookLoader(BaseBookLoader):
             for item in self.origin_book.get_items_of_type(ITEM_DOCUMENT)
             if not is_our_colophon(item)
         ]
+        if self.accumulate_across_chapters or self.whole_chapter:
+            spine_ids = [
+                entry[0] if isinstance(entry, tuple) else entry
+                for entry in self.origin_book.spine
+            ]
+            order = {item_id: index for index, item_id in enumerate(spine_ids)}
+            document_items.sort(key=lambda item: order.get(item.id, len(order)))
         chapter_plans = self._build_translation_plan(document_items, trans_taglist)
+        title_records = (
+            collect_titles(self.origin_book, chapter_plans)
+            if self.translate_metadata and not self.is_test
+            else []
+        )
         self._planned_job_ids = [
             job.job_id for plan in chapter_plans for job in plan.jobs
         ]
@@ -3891,7 +4466,6 @@ class EPUBBookLoader(BaseBookLoader):
                 "The EPUB or translation filters changed after the checkpoint; "
                 "delete the resume file and restart the translation"
             )
-
         # The plan is the single source of truth for progress and execution.
         all_p_length = sum(len(plan.jobs) for plan in chapter_plans)
         self._report_test_slice_requests(chapter_plans, all_p_length)
@@ -3908,6 +4482,7 @@ class EPUBBookLoader(BaseBookLoader):
         p_to_save_len = len(self.p_to_save)
         self._pending_translation_results = {}
         try:
+            self._prepare_obfuscated_codes(chapter_plans)
             if self.retranslate:
                 self.retranslate_book(
                     index, p_to_save_len, pbar, trans_taglist, self.retranslate
@@ -3931,7 +4506,20 @@ class EPUBBookLoader(BaseBookLoader):
                 else:
                     new_book.add_item(plan.item)
 
-            if self.enable_parallel and len(output_plans) > 1:
+            if self.translate_metadata and not self.is_test:
+                self._translate_toc_batch(chapter_plans, title_records)
+
+            if self.whole_chapter or self.accumulate_across_chapters or (
+                self.translate_metadata
+                and not self.is_test
+                and (not self.enable_parallel or len(output_plans) <= 1)
+            ):
+                self._process_accumulated_stream(chapter_plans, pbar)
+                for plan in output_plans:
+                    new_book.add_item(plan.item)
+                pbar.close()
+                self._print_usage()
+            elif self.enable_parallel and len(output_plans) > 1:
                 # Optimize worker count: no point having more workers than chapters
                 effective_workers = min(self.parallel_workers, len(output_plans))
 
@@ -4046,7 +4634,6 @@ class EPUBBookLoader(BaseBookLoader):
                         trans_taglist,
                         chapter_plan=chapter_plan,
                     )
-
                     # Save intermediate recovery book after each chapter
                     try:
                         name, _ = os.path.splitext(self.epub_name)
@@ -4066,9 +4653,10 @@ class EPUBBookLoader(BaseBookLoader):
                 pbar.close()
                 self._print_usage()
 
-                if self.accumulated_num > 1:
-                    name, _ = os.path.splitext(self.epub_name)
-                    self._write_book(f"{name}_bilingual.epub", new_book)
+            self._validate_completed_translations(chapter_plans)
+            if self.translate_metadata and not self.is_test:
+                print("Localizing EPUB titles, table of contents, and metadata...")
+                self._localize_book(new_book, chapter_plans, title_records)
             name, _ = os.path.splitext(self.epub_name)
             if self.batch_flag:
                 self.translate_model.batch()
@@ -4079,7 +4667,7 @@ class EPUBBookLoader(BaseBookLoader):
                 try:
                     if os.path.exists(self.bin_path):
                         os.remove(self.bin_path)
-                    temp_epub = f"{name}_bilingual_temp.epub"
+                    temp_epub = self.output_path(f"{name}_bilingual_temp.epub")
                     if os.path.exists(temp_epub):
                         os.remove(temp_epub)
                 except Exception:
@@ -4094,13 +4682,12 @@ class EPUBBookLoader(BaseBookLoader):
             try:
                 self._save_temp_book()
             except Exception:
-                pass
-            try:
-                name, _ = os.path.splitext(self.epub_name)
-                self._write_book(f"{name}_bilingual_temp.epub", new_book)
-                print(f"[bold green]Saved recovery book: {name}_bilingual_temp.epub[/bold green]")
-            except Exception:
-                pass
+                try:
+                    self._write_partial_recovery(
+                        new_book, chapter_plans, title_records
+                    )
+                except Exception:
+                    pass
             sys.exit(130)
         except Exception as e:
             # Handle connection errors gracefully
@@ -4123,13 +4710,12 @@ class EPUBBookLoader(BaseBookLoader):
             try:
                 self._save_temp_book()
             except Exception:
-                pass
-            try:
-                name, _ = os.path.splitext(self.epub_name)
-                self._write_book(f"{name}_bilingual_temp.epub", new_book)
-                print(f"[bold green]Saved recovery book: {name}_bilingual_temp.epub[/bold green]")
-            except Exception:
-                pass
+                try:
+                    self._write_partial_recovery(
+                        new_book, chapter_plans, title_records
+                    )
+                except Exception:
+                    pass
             sys.exit(1)
             # the run failed and there is no output book; exiting 0 would
             # tell every caller the opposite
@@ -4139,13 +4725,15 @@ class EPUBBookLoader(BaseBookLoader):
         try:
             with open(self.bin_path, "rb") as f:
                 state = pickle.load(f)
+            self._resume_code_cleanup = state.get("obfuscated_code_cleanup") if isinstance(state, dict) else None
             if (
                 not isinstance(state, dict)
-                or state.get("version") != self.CHECKPOINT_VERSION
+                or state.get("version") not in (3, self.CHECKPOINT_VERSION)
             ):
                 raise ValueError(
                     "Legacy EPUB resume checkpoints cannot be safely reused; "
-                    f"delete {self.bin_path} and restart the translation"
+                    f"{self.bin_path} has been left untouched. Resume it with "
+                    "the version that created it."
                 )
             if state.get("order") != self.CHECKPOINT_ORDER or not isinstance(
                 state.get("translations"), list
@@ -4156,6 +4744,8 @@ class EPUBBookLoader(BaseBookLoader):
             ) != len(state["translations"]):
                 raise ValueError("Invalid EPUB resume checkpoint job identities")
             self.p_to_save = state["translations"]
+            self._localized_cache = state.get("localized_cache", {})
+            self._resume_cross_chapters = state.get("cross_chapters", False)
             self._checkpoint_job_ids = state["job_ids"]
             self._last_saved_progress = len(self.p_to_save)
             # plan mode (see _save_progress): which plan — overrides and
@@ -4167,6 +4757,13 @@ class EPUBBookLoader(BaseBookLoader):
             # checkpoints written before this was recorded: those warn and
             # continue rather than being refused.
             self._resume_run_fingerprint = state.get("run_fingerprint")
+            self._loaded_checkpoint_version = state["version"]
+            if self._loaded_checkpoint_version == 3:
+                print(
+                    "[yellow]Loaded a version 3 checkpoint. Saved translations "
+                    "will be checked against this run before reuse; the "
+                    "checkpoint will be backed up and upgraded on the next save.[/yellow]"
+                )
         except ValueError:
             raise
         except Exception:
@@ -4174,7 +4771,7 @@ class EPUBBookLoader(BaseBookLoader):
 
     def _save_temp_book(self):
         name, _ = os.path.splitext(self.epub_name)
-        temp_path = f"{name}_bilingual_temp.epub"
+        temp_path = self.output_path(f"{name}_bilingual_temp.epub")
         origin_book_temp = epub.read_epub(self.epub_name)
         # A second read of the source is a second set of item objects, still
         # carrying the source's obfuscated font bytes. Without this the
@@ -4188,9 +4785,20 @@ class EPUBBookLoader(BaseBookLoader):
             for item in origin_book_temp.get_items_of_type(ITEM_DOCUMENT)
             if not is_our_colophon(item)
         ]
-        chapter_plans = iter(
-            self._build_translation_plan(document_items, trans_taglist)
+        if self.accumulate_across_chapters or self.whole_chapter:
+            spine_ids = [
+                entry[0] if isinstance(entry, tuple) else entry
+                for entry in origin_book_temp.spine
+            ]
+            order = {item_id: index for index, item_id in enumerate(spine_ids)}
+            document_items.sort(key=lambda item: order.get(item.id, len(order)))
+        all_plans = self._build_translation_plan(document_items, trans_taglist)
+        title_records = (
+            collect_titles(origin_book_temp, all_plans)
+            if self.translate_metadata
+            else []
         )
+        plan_by_item = {id(plan.item): plan for plan in all_plans}
         try:
             for item in origin_book_temp.get_items():
                 # A previous run's note is dropped, not carried: it has no
@@ -4205,7 +4813,7 @@ class EPUBBookLoader(BaseBookLoader):
                     # one plan per document, consumed in document order: the
                     # replay must walk exactly the selection the processing
                     # pass walked or global_index lands on unrelated text
-                    chapter_plan = next(chapter_plans)
+                    chapter_plan = plan_by_item[id(item)]
                     for job in chapter_plan.jobs:
                         if job.global_index >= len(self.p_to_save):
                             break
@@ -4234,7 +4842,12 @@ class EPUBBookLoader(BaseBookLoader):
                             )
                     item.content = chapter_plan.soup.encode()
                 new_temp_book.add_item(item)
+            if self.translate_metadata and not self.is_test:
+                self._localize_book(
+                    new_temp_book, all_plans, title_records, allow_requests=False
+                )
             self._write_book(temp_path, new_temp_book)
+            print(f"[bold green]Saved recovery book: {temp_path}[/bold green]")
         except Exception as e:
             # The recovery book is the only artifact a crashed run leaves
             # behind. Swallowing this told the user nothing and they found
@@ -4257,6 +4870,11 @@ class EPUBBookLoader(BaseBookLoader):
                 "order": self.CHECKPOINT_ORDER,
                 "job_ids": completed_job_ids,
                 "translations": self.p_to_save,
+                "localized_cache": self._localized_cache,
+                "cross_chapters": self.accumulate_across_chapters,
+                "obfuscated_code_cleanup": (
+                    RULE_VERSION if getattr(self, "strip_obfuscated_codes", True) else None
+                ),
                 # job ids bind a slot to its source text; this binds its
                 # contents to the language, prompt and model that wrote them
                 "run_fingerprint": self._run_fingerprint(),
@@ -4266,8 +4884,13 @@ class EPUBBookLoader(BaseBookLoader):
                 # fingerprint binds them to the decisions that produced the
                 # unit list, which the same text can change between runs
                 payload["plan_fingerprint"] = self._plan_fingerprint
+            if getattr(self, "_loaded_checkpoint_version", None) == 3:
+                backup = f"{self.bin_path}.v3.bak"
+                if not os.path.exists(backup):
+                    shutil.copy2(self.bin_path, backup)
             with open(self.bin_path, "wb") as f:
                 pickle.dump(payload, f)
+            self._loaded_checkpoint_version = self.CHECKPOINT_VERSION
             self._last_saved_progress = len(self.p_to_save)
         except Exception:
             raise Exception("can not save resume file")

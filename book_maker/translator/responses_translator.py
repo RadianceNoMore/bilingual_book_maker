@@ -515,7 +515,7 @@ class ResponsesTranslator(ChatGPTAPI):
             )
         if degree not in SCHEMA_BATCH_DEGREES:
             cap = self.substrict_batch_cap
-            if plist_len > cap:
+            if plist_len > cap and not getattr(self, "whole_chapter", False):
                 raise BatchMismatch(
                     f"batch of {plist_len} exceeds the json-degree cap of "
                     f"{cap} units for '{self.model}'"

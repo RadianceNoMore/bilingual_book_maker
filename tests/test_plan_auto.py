@@ -268,7 +268,7 @@ class ClassifyingModel(FakeModel):
 
 
 def _tag_mode_run(tmp_path):
-    """A finished tag-mode run, leaving its checkpoint next to the book."""
+    """A completed test slice with an explicit checkpoint for resume tests."""
     from book_maker.loader.epub_loader import EPUBBookLoader
 
     src = tmp_path / BOOK.name
@@ -280,6 +280,9 @@ def _tag_mode_run(tmp_path):
     loader.is_test = True
     loader.test_num = 2
     loader.make_bilingual_book()
+    # Successful runs remove their recovery files. These tests need a saved
+    # snapshot to exercise auto-mode selection on the following run.
+    loader._save_progress()
     cache = src.parent / f".{src.stem}.temp.bin"
     assert cache.exists(), "setup did not leave a tag-mode checkpoint"
     return src, cache
@@ -339,6 +342,7 @@ def test_auto_resuming_a_plan_mode_cache_still_plans(tmp_path, capsys):
     first.is_test = True
     first.test_num = 2
     first.make_bilingual_book()
+    first._save_progress()
     assert first._resume_plan_fingerprint is None and first._plan_fingerprint
     capsys.readouterr()
 
@@ -373,6 +377,9 @@ def _cli(tmp_path, *args, **envextra):
         [
             sys.executable,
             "make_book.py",
+            "--no-copy-source",
+            "--output-dir",
+            str(tmp_path),
             "--book_name",
             str(src),
             "--key",

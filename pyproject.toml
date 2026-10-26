@@ -20,6 +20,8 @@ dependencies = [
     # the gemini route's SDK; the groq, xai and litellm routes need none of
     # their own, being the OpenAI shape at another address.
     "google-genai",
+    # offline output-language checks when source and target share a script
+    "langdetect==1.0.9",
     # chat.completions.parse (Structured Outputs) is unavailable before 1.92.
     "openai>=1.92.0",
     "pydantic>=2.0",

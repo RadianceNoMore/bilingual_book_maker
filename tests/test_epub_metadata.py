@@ -5,7 +5,31 @@ import pytest
 from ebooklib import epub
 
 from book_maker.loader.epub_loader import EPUBBookLoader
+from book_maker.loader.epub_localization import set_dc_values
 from book_maker.utils import language_code
+
+
+def test_localized_subjects_keep_each_entry_and_its_attributes():
+    book = epub.EpubBook()
+    book.add_metadata("DC", "subject", "Fantasy", {"id": "genre"})
+    book.add_metadata("DC", "subject", "History", {"id": "topic"})
+    set_dc_values(
+        book, "subject",
+        {("subject", 0): "Fantaisie", ("subject", 1): "Histoire"},
+        single=False,
+    )
+    assert book.get_metadata("DC", "subject") == [
+        ("Fantasy / Fantaisie", {"id": "genre"}),
+        ("History / Histoire", {"id": "topic"}),
+    ]
+
+
+def test_metadata_localization_is_idempotent():
+    book = epub.EpubBook()
+    book.set_title("Source")
+    for _ in range(2):
+        set_dc_values(book, "title", {("title", 0): "Translation"}, single=False)
+    assert book.get_metadata("DC", "title")[0][0] == "Source / Translation"
 
 
 def test_epub_loader_handles_custom_metadata(tmp_path):

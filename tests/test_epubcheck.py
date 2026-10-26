@@ -212,6 +212,45 @@ def _translate(path, glossary_path=None, **kwargs):
     return path.with_name(f"{path.stem}_bilingual.epub")
 
 
+@pytest.mark.parametrize("plan_mode", [False, True])
+@pytest.mark.parametrize("single", [False, True])
+def test_cross_chapter_localization_produces_valid_epub(
+    tmp_path, monkeypatch, epubcheck, plan_mode, single
+):
+    monkeypatch.chdir(tmp_path)
+    book = _base_book("cross-chapter-validation")
+    second = epub.EpubHtml(
+        uid="second", title="Two", file_name="second.xhtml", lang="en"
+    )
+    second.content = (
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Two</title></head>'
+        '<body><h1 id="two">Two</h1><p>Another chapter.</p></body></html>'
+    )
+    book.add_item(second)
+    book.toc = (*book.toc, epub.Link("second.xhtml#two", "Two", "second-link"))
+    book.spine.append(second)
+    source = tmp_path / "cross.epub"
+    epub.write_epub(str(source), book)
+    _assert_valid(epubcheck, source, "source cross-chapter fixture")
+
+    loader = EPUBBookLoader(
+        str(source), StandInModel, "", False, "japanese", single_translate=single
+    )
+    loader.accumulated_num = 1000
+    loader.accumulated_num_given = True
+    loader.accumulate_across_chapters = True
+    loader.quiet = True
+    if plan_mode:
+        loader.plan_mode = True
+        loader.plan_classify = "all"
+        loader.translate_tags = "auto"
+    loader.make_bilingual_book()
+    _assert_valid(
+        epubcheck, source.with_name("cross_bilingual.epub"),
+        "localized cross-chapter output",
+    )
+
+
 @pytest.fixture
 def tdm_book(tmp_path):
     """Rights metadata under a prefix the source declares."""

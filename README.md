@@ -4,6 +4,33 @@
 
 **[中文](./README-CN.md) | English**
 
+Translated books now go into `./output` by default. Use `--output-dir PATH`
+(`--output_dir` also works) to choose another directory. Before translation,
+the source is copied into `./input`, where checkpoints and plans are kept;
+`--input-dir PATH` changes that directory. Existing checkpoints beside the
+original are copied on `--resume` without overwriting working progress. If
+the original moves, resume with `--book_name ./input/BOOK.epub --resume`.
+Paths are relative to your current working directory. `--no-copy-source`
+keeps reading the original instead.
+
+EPUB runs remove recognized obfuscated contact codes by default while preserving
+ordinary advertisements. Use `--strip-obfuscated-codes off` to disable cleanup.
+Existing checkpoints can resume with cleanup enabled; source files stay unchanged.
+
+For EPUBs on an LLM endpoint, `--whole-chapter` sends each XHTML chapter's
+selected text together, overriding `--accumulated_num` and unit limits.
+Remove `--accumulate-across-chapters` and use one worker for this mode.
+The chapter must fit the model's context and output limits. Failed chunks
+are retried intact up to three times; `--retry-one-by-one` opts into
+individual paragraph retries instead. Exhausted retries save progress and stop.
+
+Translation chunks are checked for source-only script letters that make up
+at least half of a reply, likely wrong-language prose, and leaked instructions
+or Markdown. Shared alphabets such as French and English use language
+identification on long replies. Checks run before saving fresh chunks and
+before publishing cached translations; they detect likely failures, not
+translation accuracy.
+
 
 The bilingual_book_maker is an AI translation tool that uses ChatGPT to assist users in creating multi-language versions of epub/txt/md/srt/pdf files and books. Use it only with material you have the right to translate — works for which you hold the necessary rights, suitably licensed or permitted works, public-domain books, or uses otherwise allowed by applicable law. Before using this tool, please review the project's **[disclaimer](./disclaimer.md)**.
 
@@ -712,6 +739,146 @@ python3 make_book.py --book_name 'animal_farm.epub' --key XXXXX --api_base 'http
 # Or python3 is not in your PATH
 python make_book.py --book_name 'animal_farm.epub' --key XXXXX --api_base 'https://example-endpoint.openai.azure.com/openai/v1' --model 'deployment-name' --use_context session
 ```
+
+## Fork extras: bulk-resume wrapper, progress preview, and EPUB title/TOC localization
+
+This fork ships four standalone helper scripts beside `make_book.py`. Run them
+directly with Python for bulk translation across model fallbacks, previews of
+runs in progress, and metadata repairs on older EPUB outputs. New `make_book.py`
+runs automatically localize EPUB titles, the TOC, and descriptive metadata.
+
+### `make_gg_book.py` — resume a bulk translation across a model fallback chain
+
+`--model_list` rotates models per request; it does **not** fall back when a model
+runs out of quota. And `--resume` refuses a run whose `--model` differs from the
+one that wrote the checkpoint — the run fingerprint binds language/prompt/model.
+This wrapper does the fallback the CLI does not:
+
+- Runs `make_book.py` once per model, best first, forcing
+  `--api_format gemini --key … --model … --interval …`.
+- Adds `--resume` starting from the first attempt that finds a `<book>.temp.bin`
+  checkpoint, so every later model continues the same book instead of restarting.
+- Before each attempt it drops `run_fingerprint` from the epub checkpoint (the
+  original is kept once as `<book>.temp.bin.bak`) so a *different* model is
+  allowed to continue. The finished book mixes models by design — that is the
+  price of finishing a big book on free-tier quota.
+- On a quota/overload signal (`429`, `RESOURCE_EXHAUSTED`, HTTP `5xx`, timeouts)
+  it falls through to the next model. A model killed by a *daily* quota
+  (`quotaId …PerDay…`) is remembered in `make_gg_book.skip.json` and skipped
+  until UTC midnight on later invocations; per-minute limits and `503`s are never
+  remembered. Non-quota failures (bad key, bad model id, missing book) fail fast,
+  because the next model would fail the same way.
+- Forces `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8` on the child, so echoing CJK
+  source paragraphs does not crash a cp1252 Windows console.
+
+```shell
+python make_gg_book.py --book_name book.epub --key $GEMINI_API_KEY ^
+    --models "gemini-3-flash-preview,gemini-3.1-flash-lite,gemma-4-26b-a4b-it" ^
+    --language en --source_lang ko --single_translate -- --quiet --accumulated_num 3500
+```
+
+Everything after `--` is forwarded verbatim to `make_book.py`. Do **not** pass
+`--model`, `--model_list`, `--key`, `--api_key`, `--api_format`, `--interval` or
+`--resume` after `--` — the wrapper owns them and refuses the run if it sees one.
+`--interval` forces one pacing for every model, `--intervals` gives a per-model
+comma list (default auto: 13 s Flash / 5 s lite / 6 s Gemma), `--reset-skips`
+clears the daily-quota memory, and `--dry-run` prints the whole chain without
+running it.
+
+> **Crash safety:** a resumable book uses `--accumulated_num 1` or
+> `--plan-classify`. Plain batched tag mode (`--accumulated_num` > 1 without
+> `--plan-classify`) banks progress only at batch boundaries; the wrapper prints a
+> warning when it sees that shape.
+
+### `preview_progress.py` — read a running translation's checkpoint
+
+A run banks progress in `<book>.temp.bin` but only writes a book at the end (or on
+crash). This script copies that checkpoint and the source epub into a temp dir,
+replays the banked translations through the loader's own `_save_temp_book`, and
+writes `<stem>_preview.epub` — without touching the live run. Safe to rerun at any
+time; after the first batch lands.
+
+```shell
+python preview_progress.py book.epub [book_preview.epub] --translate-tags h1,h2,h3,p,li
+```
+
+`--translate-tags` **must match the running run**, or the loader's job-id prefix
+check refuses rather than splicing the wrong text under the wrong paragraph.
+
+### `fix_epub_metadata.py` — localize an EPUB's metadata, title and TOC
+
+Older translated EPUBs may still have source-language document titles, OPF
+metadata, and table-of-contents labels. This repair script syncs them from
+the translated body:
+
+- `<head><title>` of every document, taken from its translated `<h1>`/`<h2>`.
+- `toc.ncx` (EPUB 2): `<docTitle>` and every `<navLabel>`, with Volume/section
+  labels translated (`第N卷` → `Volume N` / `เล่มที่ N`).
+- `nav.xhtml` (EPUB 3): the `<h2>` heading, the volume `<span>`s and the chapter
+  `<a>` links.
+- `content.opf`: `<dc:title>`, `<dc:language>`, `<dc:description>`, `<dc:creator>`.
+- `<html lang="…">` on every document.
+
+```shell
+python fix_epub_metadata.py translated_book.epub --lang th
+python fix_epub_metadata.py translated_book.epub --lang en --title "Book Title" --author "Author"
+```
+
+Works for any target language (`--lang th` is the default; `en`, … are supported).
+`--title` / `--author` override the derived values. The original is kept once as
+`<book>.epub.bak`. Rerun it after the full-book translation.
+
+### Automatic EPUB titles and metadata
+
+`make_book.py` now localizes TOC labels, chapter document titles, the book title,
+description, and subjects while translating an EPUB. This works with ordinary
+`--translate-tags` runs and `--plan-classify`, for both bilingual and
+`--single_translate` output. The selected TOC and imported navigation labels
+are translated together before chapter text; the approved result is reused in
+matching chapter headings, document titles, and book metadata. Bilingual
+labels contain the source and translation, while `--single_translate` uses
+the translation.
+Pass `--no-translate-metadata` to keep the source labels and metadata.
+
+By default, `--accumulated_num` batches end at a chapter boundary. To let one
+token-budget request carry the end of one chapter and the start of the next,
+use `--accumulate-across-chapters` with an explicit value above `1`:
+
+```shell
+python make_book.py --book_name book.epub --language en --accumulated_num 1600 --accumulate-across-chapters
+```
+
+Cross-chapter accumulation runs sequentially; it cannot be combined with
+`--parallel-workers`. The title and metadata integration is enabled even when
+cross-chapter accumulation is off.
+
+### `fix_en_metadata.py` — repair an older `--single_translate` English book
+
+An older, English-only repair script for Korean web-novel EPUBs produced before
+automatic metadata localization. It syncs
+`dc:title` / `dc:description` / `dc:subject` / `dc:language`, the `toc.ncx` labels,
+and each file's `<head><title>` and `npkr-title` meta from the translated English
+`<h1>`. Subjects with no mapping are reported and left alone.
+
+```shell
+python fix_en_metadata.py translated_en.epub
+```
+
+Updated in place; the original is kept once as `<book>.epub.bak`.
+
+### Resume/checkpoint changes in `book_maker/loader/epub_loader.py`
+
+Fork changes to the loader's resume path:
+
+- Tag-mode batching (`--accumulated_num` > 1) now appends each translated
+  paragraph to the checkpoint as it goes and, on `--resume`, reuses the cached
+  translation of any unit it has already done — so a batched run can continue
+  instead of restarting.
+- After every chapter, and on Ctrl-C or an error, the loader writes a recovery
+  book `<book>_bilingual_temp.epub` holding everything translated so far.
+- A clean finish removes both `<book>.temp.bin` and that recovery book.
+- A halted run exits non-zero — `130` on Ctrl-C, `1` on error — instead of `0`, so
+  a script or agent can tell a finished book from a stopped one.
 
 ## Docker
 

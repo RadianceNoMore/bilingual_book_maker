@@ -156,6 +156,20 @@ def test_references_name_no_flag_that_does_not_exist():
     send a reader — or an agent following the skill — to an argparse error.
     """
     known = _long_cli_options() | _legacy_flags() | _FOREIGN_FLAGS
+    # README also documents the standalone EPUB helpers by script name.
+    # Their real parser options are valid documentation, too.
+    for script in (
+        "make_gg_book.py", "preview_progress.py",
+        "fix_epub_metadata.py", "fix_en_metadata.py",
+    ):
+        tree = ast.parse((ROOT / script).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "add_argument":
+                known.update(
+                    arg.value for arg in node.args
+                    if isinstance(arg, ast.Constant)
+                    and isinstance(arg.value, str) and arg.value.startswith("--")
+                )
     # Options hidden with argparse.SUPPRESS are absent from
     # _long_cli_options by design; they are still legal to type, so a
     # reference naming one is not an error.

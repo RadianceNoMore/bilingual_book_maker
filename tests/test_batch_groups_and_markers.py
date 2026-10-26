@@ -295,10 +295,11 @@ class _HalvingFake:
 
 
 class TestDivideLadder:
-    def test_batch_mismatch_halves_to_singles(self):
+    def test_batch_mismatch_uses_singles_when_explicitly_enabled(self):
         from book_maker.loader.epub_loader import EPUBBookLoader
 
         loader = EPUBBookLoader.__new__(EPUBBookLoader)
+        loader.retry_one_by_one = True
         fake = _HalvingFake()
         loader.translate_model = fake
 
@@ -309,12 +310,8 @@ class TestDivideLadder:
             "T[POISON]",
             "T[a4]",
         ]
-        # halving, not 4 immediate singles: 4 -> [a1,a2] ok, [POISON,a4]
-        # mismatch -> singles for that half only
-        assert fake.batch_calls[0] == texts
-        assert ["POISON", "a4"] in fake.batch_calls
-        assert fake.single_calls == ["POISON", "a4"]
-        assert "a1" not in fake.single_calls
+        assert fake.batch_calls == [texts]
+        assert fake.single_calls == texts
 
     def test_frequent_recoveries_earn_the_lower_your_caps_hint(self, capsys):
         """One split is the contract working; three is the operator's cue.
@@ -325,6 +322,7 @@ class TestDivideLadder:
         from book_maker.loader.epub_loader import EPUBBookLoader
 
         loader = EPUBBookLoader.__new__(EPUBBookLoader)
+        loader.retry_one_by_one = True
         loader.translate_model = _HalvingFake()
 
         hint = "may fit this model better"
@@ -395,6 +393,7 @@ def _marker_loader():
     from book_maker.loader.helper import EPUBBookLoaderHelper
 
     loader = EPUBBookLoader.__new__(EPUBBookLoader)
+    loader.retry_one_by_one = True
     loader.language_tag = "zh-Hans"
     loader.translation_style = ""
     loader.single_translate = False
@@ -442,10 +441,9 @@ class TestShiftedReplyIsCaughtByItsMarkers:
 
         result = loader._translate_texts_aligned(texts, fake, units)
 
-        # the shifted batch was sent once, then divided rather than written
-        assert fake.batch_calls[0] == texts
-        assert fake.single_calls == [texts[0]]
-        assert texts[1:] in fake.batch_calls
+        # Explicit singles recover alignment without writing the shifted reply.
+        assert fake.batch_calls == [texts]
+        assert fake.single_calls == texts
         # every slot now answers its own unit
         assert result == [f"T[{t}]" for t in texts]
 
@@ -476,7 +474,7 @@ class TestShiftedReplyIsCaughtByItsMarkers:
         loader._translate_texts_aligned([u.text for u in units], fake, units)
 
         out = capsys.readouterr().out
-        assert "shifted" in out and "splitting for realignment" in out
+        assert "shifted" in out and "retrying one by one" in out
         assert next(iter(units[1].markers)) in out
 
     def test_a_clean_reply_is_returned_byte_identically(self):
@@ -660,15 +658,14 @@ class TestCountCompensatedShiftIsCaughtByItsNumbers:
         from book_maker.loader.epub_loader import EPUBBookLoader
 
         loader = EPUBBookLoader.__new__(EPUBBookLoader)
+        loader.retry_one_by_one = True
         fake = _MergingBatchFake(merge_at=len(WASTE_LINES))
         loader.translate_model = fake
 
         result = loader._translate_texts_aligned(WASTE_LINES)
 
-        # the poisoned batch was sent once, then halved rather than written
-        assert fake.batch_calls[0] == WASTE_LINES
-        assert WASTE_LINES[:6] in fake.batch_calls
-        assert WASTE_LINES[6:] in fake.batch_calls
+        assert fake.batch_calls == [WASTE_LINES]
+        assert fake.single_calls == WASTE_LINES
         # every slot now answers its own line, and the invention is gone
         assert result == [f"译[{line}]" for line in WASTE_LINES]
         assert FILLER not in "".join(result)
@@ -677,13 +674,14 @@ class TestCountCompensatedShiftIsCaughtByItsNumbers:
         from book_maker.loader.epub_loader import EPUBBookLoader
 
         loader = EPUBBookLoader.__new__(EPUBBookLoader)
+        loader.retry_one_by_one = True
         loader.translate_model = _MergingBatchFake(merge_at=len(WASTE_LINES))
 
         loader._translate_texts_aligned(WASTE_LINES)
 
         out = " ".join(capsys.readouterr().out.split())  # rich wraps the line
         # the same narration wrong-slot marker evidence earns
-        assert "came back shifted" in out and "splitting for realignment" in out
+        assert "came back shifted" in out and "retrying one by one" in out
         # the moved number, where it belongs and where it landed
         assert "160 belongs to slot 3 of 12 and came back in slot 2" in out
         assert "2 more numbers moved the same way" in out

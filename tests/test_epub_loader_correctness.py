@@ -114,6 +114,45 @@ def _write_epub(path, chapters):
     epub.write_epub(str(path), book)
 
 
+def _write_epub_with_toc(path, chapters, metadata=False):
+    book = epub.EpubBook()
+    book.set_identifier("toc-fixture")
+    book.set_title("Correctness baseline")
+    book.set_language("en")
+    if metadata:
+        book.add_metadata("DC", "description", "A source synopsis")
+        book.add_metadata("DC", "subject", "Fantasy")
+    items = []
+    for index, (file_name, paragraphs) in enumerate(chapters):
+        item = epub.EpubHtml(
+            uid=f"chapter-{index}", title=f"Chapter {index + 1}",
+            file_name=file_name, lang="en"
+        )
+        body = "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+        if not body:
+            body = f"<h1>Chapter {index + 1}</h1>"
+        item.content = (
+            "<html><head><title>Old title</title><meta name='npkr-title' "
+            "content='Old title'/></head><body>" + body + "</body></html>"
+        )
+        book.add_item(item)
+        items.append(item)
+    book.toc = tuple(epub.Link(item.file_name, item.title, item.id) for item in items)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ["nav", *items]
+    epub.write_epub(str(path), book)
+    if metadata:
+        for item in items:
+            member = f"EPUB/{item.file_name}"
+            with zipfile.ZipFile(path) as archive:
+                raw = archive.read(member).decode("utf-8")
+            _replace_epub_member(
+                path, member,
+                raw.replace("</head>", '<meta name="npkr-title" content="Old title"/></head>'),
+            )
+
+
 def _replace_epub_member(path, member_name, content):
     """Replace one archive member without leaving a duplicate ZIP entry."""
     replacement = path.with_suffix(".replacement.epub")
@@ -191,6 +230,9 @@ def _make_loader(
         is_test=is_test,
         test_num=test_num,
     )
+    # These tests isolate body translation and checkpoint ordering. Metadata
+    # localization has its own dedicated EPUB tests.
+    loader.translate_metadata = False
     return loader, source.with_name("book_bilingual.epub")
 
 
@@ -482,6 +524,509 @@ def test_epub_sequential_accumulated_num_batches_in_document_order(
         assert content.count(f"&lt;T&gt;{text}&lt;/T&gt;") == 1
 
 
+def test_cross_chapter_batch_includes_each_toc_title(tmp_path, monkeypatch):
+    monkeypatch.setattr("book_maker.loader.epub_loader.num_tokens_from_text", len)
+    _write_epub_with_toc(tmp_path / "book.epub", [("one.xhtml", ["one"]), ("two.xhtml", ["two"])])
+    loader, output = _make_loader(
+        tmp_path, monkeypatch, [("one.xhtml", ["one"]), ("two.xhtml", ["two"])]
+    )
+    loader.translate_metadata = True
+    loader.accumulated_num = 100
+    loader.accumulated_num_given = True
+    loader.accumulate_across_chapters = True
+    loader.single_translate = True
+
+    loader.make_bilingual_book()
+
+    assert ["Chapter 1", "one", "Chapter 2", "two"] in loader.translate_model.list_calls
+    translated = epub.read_epub(str(output))
+    assert [entry.title for entry in translated.toc] == [
+        "<T>Chapter 1</T>", "<T>Chapter 2</T>"
+    ]
+    assert translated.get_metadata("DC", "title")[0][0] == "<T>Correctness baseline</T>"
+    assert "&lt;T&gt;one&lt;/T&gt;" in _document_texts(output)["one.xhtml"]
+
+
+def test_default_accumulation_groups_toc_title_with_its_chapter(tmp_path, monkeypatch):
+    monkeypatch.setattr("book_maker.loader.epub_loader.num_tokens_from_text", len)
+    chapters = [("one.xhtml", ["one"]), ("two.xhtml", ["two"])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+    loader, _ = _make_loader(tmp_path, monkeypatch, chapters)
+    loader.translate_metadata = True
+    loader.accumulated_num = 100
+    loader.accumulated_num_given = True
+    loader.make_bilingual_book()
+    assert ["Chapter 1", "one"] in loader.translate_model.list_calls
+    assert ["Chapter 2", "two"] in loader.translate_model.list_calls
+    assert ["Chapter 1", "one", "Chapter 2", "two"] not in loader.translate_model.list_calls
+
+
+@pytest.mark.parametrize("plan_mode", [False, True])
+def test_whole_chapter_ignores_budgets_and_keeps_chapters_separate(
+    tmp_path, monkeypatch, plan_mode
+):
+    chapters = [("one.xhtml", ["one", "two", "three"]),
+                ("two.xhtml", ["four", "five"])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+    loader, output = _make_loader(tmp_path, monkeypatch, chapters)
+    loader.whole_chapter = True
+    loader.translate_metadata = True
+    loader.accumulated_num = 2
+    loader.accumulated_num_given = True
+    loader.batch_units = 1
+    if plan_mode:
+        loader.plan_mode = True
+        loader.plan_classify = "all"
+        loader.translate_tags = "auto"
+    loader.make_bilingual_book()
+    assert ["Chapter 1", "one", "two", "three"] in loader.translate_model.list_calls
+    assert ["Chapter 2", "four", "five"] in loader.translate_model.list_calls
+    # Plan mode also selects the navigation XHTML as its own document.
+    assert len(loader.translate_model.list_calls) == (3 if plan_mode else 2)
+    assert output.is_file()
+
+
+@pytest.mark.parametrize("eventually_translates", [False, True])
+def test_english_whole_chapter_does_not_accept_echoed_chinese(
+    tmp_path, monkeypatch, capsys, eventually_translates
+):
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda _: None)
+    class EchoChapter(RecordingModel):
+        def translate_list(self, texts):
+            self.list_calls.append(list(texts))
+            if eventually_translates and len(self.list_calls) == 3:
+                return ["Section Three: A Mysterious Voice", "The sound came from ahead."]
+            return list(texts)
+
+    source = ["第三节  神秘的声音", "声音是从前面传来的"]
+    loader, output = _make_loader(
+        tmp_path, monkeypatch, [("chap_5.xhtml", source)], model=EchoChapter
+    )
+    loader.language = "English"
+    loader.language_tag = "en"
+    loader.whole_chapter = True
+    if eventually_translates:
+        loader.make_bilingual_book()
+        assert output.exists()
+        assert "Section Three: A Mysterious Voice" in _document_texts(output)["chap_5.xhtml"]
+    else:
+        with pytest.raises(SystemExit) as failure:
+            loader.make_bilingual_book()
+        assert failure.value.code == 1
+        assert not output.exists()
+        assert loader.p_to_save == []
+        stdout = capsys.readouterr().out
+        assert "chap_5.xhtml" in stdout
+        assert "Bilingual book saved:" not in stdout
+    assert loader.translate_model.list_calls == [source] * 3
+    assert loader.translate_model.calls == []
+
+
+@pytest.mark.parametrize("previous_cross", [False, True])
+def test_whole_chapter_failure_saves_completed_chapters_for_resume(tmp_path, monkeypatch, previous_cross):
+    from book_maker.translator.base_translator import BatchMismatch
+
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda _: None)
+    class FailingChapter(RecordingModel):
+        def translate_list(self, texts):
+            if "six" in texts:
+                self.list_calls.append(list(texts))
+                raise BatchMismatch("incomplete chapter response")
+            return super().translate_list(texts)
+
+    chapters = [("one.xhtml", ["one", "two"]), ("two.xhtml", ["six", "ten"])]
+    loader, output = _make_loader(tmp_path, monkeypatch, chapters, model=FailingChapter)
+    loader.whole_chapter = not previous_cross
+    if previous_cross:
+        monkeypatch.setattr("book_maker.loader.epub_loader.num_tokens_from_text", len)
+        loader.accumulated_num = 6
+        loader.accumulate_across_chapters = True
+    with pytest.raises(SystemExit) as failure:
+        loader.make_bilingual_book()
+    assert failure.value.code == 1
+    assert not output.exists()
+    assert loader.translate_model.list_calls == [["one", "two"]] + [["six", "ten"]] * 3
+    with open(loader.bin_path, "rb") as checkpoint:
+        saved = pickle.load(checkpoint)
+    assert saved["translations"] == ["<T>one</T>", "<T>two</T>"]
+
+    resumed, _ = _make_loader(tmp_path, monkeypatch, chapters, resume=True)
+    resumed.whole_chapter = True
+    resumed.make_bilingual_book()
+    assert resumed.translate_model.list_calls == [["six", "ten"]]
+    assert output.exists()
+
+
+def test_cross_chapter_budget_exact_fit_and_oversized_unit(tmp_path, monkeypatch):
+    monkeypatch.setattr("book_maker.loader.epub_loader.num_tokens_from_text", len)
+    loader, output = _make_loader(
+        tmp_path, monkeypatch,
+        [("one.xhtml", ["aa"]), ("two.xhtml", ["bbb", "oversized", "cc"])],
+    )
+    loader.accumulated_num = 5
+    loader.accumulate_across_chapters = True
+    loader.make_bilingual_book()
+    assert loader.translate_model.list_calls == [["aa", "bbb"]]
+    assert loader.translate_model.calls == ["aa", "bbb", "oversized", "cc"]
+    contents = _document_texts(output)
+    assert "&lt;T&gt;aa&lt;/T&gt;" in contents["one.xhtml"]
+    assert "&lt;T&gt;bbb&lt;/T&gt;" not in contents["one.xhtml"]
+    assert "&lt;T&gt;oversized&lt;/T&gt;" in contents["two.xhtml"]
+
+
+def test_cross_chapter_stream_uses_spine_order(tmp_path, monkeypatch):
+    chapters = [("one.xhtml", ["one"]), ("two.xhtml", ["two"])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+    loader, _ = _make_loader(tmp_path, monkeypatch, chapters)
+    loader.origin_book.spine = list(reversed(loader.origin_book.spine))
+    loader.translate_metadata = True
+    loader.accumulated_num = 100
+    loader.accumulate_across_chapters = True
+    loader.make_bilingual_book()
+    assert loader.translate_model.list_calls[0] == [
+        "Chapter 2", "two", "Chapter 1", "one"
+    ]
+
+
+@pytest.mark.parametrize("cross_chapters", [False, True])
+def test_distinct_toc_label_keeps_its_own_translation(tmp_path, monkeypatch, cross_chapters):
+    chapters = [("one.xhtml", ["body"])]
+    source = tmp_path / "book.epub"
+    _write_epub_with_toc(source, chapters)
+    with zipfile.ZipFile(source) as archive:
+        content = archive.read("EPUB/one.xhtml").decode("utf-8")
+    _replace_epub_member(source, "EPUB/one.xhtml", content.replace(
+        "<p>body</p>", "<h1>Visible heading</h1><p>body</p>"
+    ))
+    loader, output = _make_loader(tmp_path, monkeypatch, chapters)
+    loader.translate_metadata = True
+    loader.translate_tags = "h1,p"
+    loader.single_translate = True
+    loader.accumulated_num = 100
+    loader.accumulate_across_chapters = cross_chapters
+    loader.make_bilingual_book()
+    assert epub.read_epub(str(output)).toc[0].title == "<T>Chapter 1</T>"
+    assert loader.translate_model.calls.count("Chapter 1") == 1
+
+
+def test_metadata_localization_preserves_excluded_document_language(tmp_path, monkeypatch):
+    chapters = [("one.xhtml", ["one"]), ("skip.xhtml", ["source"])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+    loader, output = _make_loader(tmp_path, monkeypatch, chapters)
+    loader.translate_metadata = True
+    loader.single_translate = True
+    loader.exclude_filelist = "skip.xhtml"
+    original = loader.origin_book.get_item_with_href("skip.xhtml").content
+    loader.make_bilingual_book()
+    with zipfile.ZipFile(output) as archive:
+        assert archive.read("EPUB/skip.xhtml") == original
+
+
+@pytest.mark.parametrize("single", [False, True])
+def test_nav_heading_translation_is_not_sent_for_translation_again(tmp_path, monkeypatch, single):
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "book.epub"
+    _write_epub_with_custom_nav(source)
+    loader = EPUBBookLoader(str(source), RecordingModel, "", False, "zh-hans")
+    loader.translate_tags = "h2,p"
+    loader.single_translate = single
+    loader.make_bilingual_book()
+    assert not any(text.startswith("<T>") for text in loader.translate_model.calls)
+    from bs4 import BeautifulSoup
+    with zipfile.ZipFile(tmp_path / "book_bilingual.epub") as archive:
+        nav = BeautifulSoup(archive.read("EPUB/toc.xhtml"), "html.parser")
+    expected = "<T>Source table of contents</T>"
+    if not single:
+        expected = f"Source table of contents / {expected}"
+    assert nav.select_one("nav h2").get_text(" ", strip=True) == expected
+
+
+def test_documents_without_toc_get_localized_head_titles(tmp_path, monkeypatch):
+    source = tmp_path / "book.epub"
+    _write_epub(source, [("one.xhtml", ["body"])])
+    with zipfile.ZipFile(source) as archive:
+        content = archive.read("EPUB/one.xhtml").decode("utf-8")
+    _replace_epub_member(source, "EPUB/one.xhtml", content.replace(
+        "<body>", "<head><title>Chapter 1</title></head><body>"
+    ))
+    loader, output = _make_loader(tmp_path, monkeypatch, [("one.xhtml", ["body"])])
+    loader.translate_metadata = True
+    loader.single_translate = True
+    assert not loader.origin_book.toc
+    loader.make_bilingual_book()
+    with zipfile.ZipFile(output) as archive:
+        content = archive.read("EPUB/one.xhtml").decode("utf-8")
+    assert "<title>&lt;T&gt;Chapter 1&lt;/T&gt;</title>" in content
+
+
+def test_metadata_only_resume_checks_language_prompt_and_model(tmp_path, monkeypatch):
+    loader, _ = _make_loader(tmp_path, monkeypatch, [("one.xhtml", ["body"])])
+    loader.resume = True
+    loader._localized_cache = {"title": "cached translation"}
+    loader._resume_run_fingerprint = "another-language"
+    with pytest.raises(SystemExit):
+        loader._check_resume_run_fingerprint()
+
+
+@pytest.mark.parametrize("cross_chapters", [False, True])
+def test_empty_title_reply_does_not_produce_finished_book(tmp_path, monkeypatch, cross_chapters):
+    chapters = [("one.xhtml", ["body"])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+
+    class EmptyTitle(RecordingModel):
+        def translate(self, text):
+            return "" if text == "Chapter 1" else super().translate(text)
+
+    loader, output = _make_loader(tmp_path, monkeypatch, chapters, model=EmptyTitle)
+    loader.translate_metadata = True
+    loader.accumulate_across_chapters = cross_chapters
+    if cross_chapters:
+        loader.accumulated_num = 100
+    with pytest.raises(SystemExit) as error:
+        loader.make_bilingual_book()
+    assert error.value.code == 1
+    assert not output.exists()
+
+
+def test_parallel_accumulation_reuses_heading_for_toc(tmp_path, monkeypatch):
+    source = tmp_path / "book.epub"
+    chapters = [("one.xhtml", ["body one"]), ("two.xhtml", ["body two"])]
+    _write_epub_with_toc(source, chapters)
+    for index, (name, _) in enumerate(chapters, 1):
+        with zipfile.ZipFile(source) as archive:
+            raw = archive.read(f"EPUB/{name}").decode("utf-8")
+        _replace_epub_member(source, f"EPUB/{name}", raw.replace(
+            "<body>", f"<body><h1>Chapter {index}</h1>"
+        ))
+    loader, output = _make_loader(tmp_path, monkeypatch, chapters, parallel_workers=2)
+    loader.translate_metadata = True
+    loader.translate_tags = "h1,p"
+    loader.accumulated_num = 100
+    loader.single_translate = True
+    loader.make_bilingual_book()
+    assert loader.translate_model.calls.count("Chapter 1") == 1
+    assert loader.translate_model.calls.count("Chapter 2") == 1
+    assert [entry.title for entry in epub.read_epub(str(output)).toc] == [
+        "<T>Chapter 1</T>", "<T>Chapter 2</T>"
+    ]
+
+
+def test_alias_toc_labels_for_same_target_remain_distinct(tmp_path, monkeypatch):
+    from bs4 import BeautifulSoup
+    chapters = [("one.xhtml", ["body"])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+    loader, output = _make_loader(tmp_path, monkeypatch, chapters)
+    loader.origin_book.toc = (
+        *loader.origin_book.toc, epub.Link("one.xhtml", "Alternate label", "alias")
+    )
+    nav = next(item for item in loader.origin_book.get_items() if isinstance(item, epub.EpubNav))
+    soup = BeautifulSoup(nav.content, "html.parser")
+    alias = soup.new_tag("a", href="one.xhtml")
+    alias.string = "Alternate label"
+    row = soup.new_tag("li")
+    row.append(alias)
+    soup.select_one("nav ol").append(row)
+    nav.content = soup.encode("utf-8")
+    loader.translate_metadata = True
+    loader.accumulated_num = 100
+    loader.single_translate = True
+    loader.make_bilingual_book()
+    with zipfile.ZipFile(output) as archive:
+        result = BeautifulSoup(archive.read("EPUB/nav.xhtml"), "html.parser")
+    assert [link.get_text() for link in result.select("nav a")] == [
+        "<T>Chapter 1</T>", "<T>Alternate label</T>"
+    ]
+
+
+def test_title_only_chapter_is_localized_when_selected(tmp_path, monkeypatch):
+    chapters = [("one.xhtml", [])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+    loader, output = _make_loader(tmp_path, monkeypatch, chapters)
+    loader.translate_metadata = True
+    loader.accumulated_num = 100
+    loader.accumulated_num_given = True
+    loader.make_bilingual_book()
+    assert epub.read_epub(str(output)).toc[0].title == (
+        "Chapter 1 / <T>Chapter 1</T>"
+    )
+    assert "&lt;T&gt;Chapter 1&lt;/T&gt;" in _document_texts(output)["one.xhtml"]
+
+
+def test_metadata_opt_out_leaves_source_toc(tmp_path, monkeypatch):
+    _write_epub_with_toc(tmp_path / "book.epub", [("one.xhtml", ["one"])])
+    loader, output = _make_loader(
+        tmp_path, monkeypatch, [("one.xhtml", ["one"])]
+    )
+    loader.accumulated_num = 100
+    loader.accumulate_across_chapters = True
+    loader.make_bilingual_book()
+    assert [entry.title for entry in epub.read_epub(str(output)).toc] == ["Chapter 1"]
+
+
+def test_default_localizes_toc_and_document_title(tmp_path, monkeypatch):
+    _write_epub_with_toc(tmp_path / "book.epub", [("one.xhtml", ["one"])], metadata=True)
+    loader, output = _make_loader(
+        tmp_path, monkeypatch, [("one.xhtml", ["one"])]
+    )
+    loader.translate_metadata = True
+    loader.single_translate = True
+    loader.make_bilingual_book()
+
+    result = epub.read_epub(str(output))
+    assert result.toc[0].title == "<T>Chapter 1</T>"
+    assert result.get_metadata("DC", "description")[0][0] == "<T>A source synopsis</T>"
+    assert result.get_metadata("DC", "subject")[0][0] == "<T>Fantasy</T>"
+    assert result.get_metadata("DC", "language")[0][0] == "zh-hans"
+    with zipfile.ZipFile(output) as archive:
+        chapter = archive.read("EPUB/one.xhtml").decode("utf-8")
+        ncx = archive.read("EPUB/toc.ncx").decode("utf-8")
+        nav = archive.read("EPUB/nav.xhtml").decode("utf-8")
+    assert "<title>&lt;T&gt;Chapter 1&lt;/T&gt;</title>" in chapter
+    assert 'content="&lt;T&gt;Chapter 1&lt;/T&gt;"' in chapter
+    assert 'lang="zh-hans"' in chapter
+    assert "&lt;T&gt;Chapter 1&lt;/T&gt;" in ncx
+    assert "&lt;T&gt;Chapter 1&lt;/T&gt;" in nav
+
+
+def test_plan_mode_cross_chapter_batch(tmp_path, monkeypatch):
+    monkeypatch.setattr("book_maker.loader.epub_loader.num_tokens_from_text", len)
+    _write_epub_with_toc(tmp_path / "book.epub", [("one.xhtml", ["one"]), ("two.xhtml", ["two"])])
+    loader, output = _make_loader(
+        tmp_path, monkeypatch, [("one.xhtml", ["one"]), ("two.xhtml", ["two"])]
+    )
+    loader.translate_metadata = True
+    loader.plan_mode = True
+    loader.plan_classify = "all"
+    loader.translate_tags = "auto"
+    loader.accumulated_num = 100
+    loader.accumulated_num_given = True
+    loader.accumulate_across_chapters = True
+    loader.make_bilingual_book()
+    assert any("one" in call and "two" in call for call in loader.translate_model.list_calls)
+    assert [entry.title for entry in epub.read_epub(str(output)).toc] == [
+        "Chapter 1 / <T>Chapter 1</T>",
+        "Chapter 2 / <T>Chapter 2</T>",
+    ]
+
+
+def test_fragment_toc_titles_reuse_body_heading_translations(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    book = epub.EpubBook()
+    book.set_identifier("fragment-fixture")
+    book.set_title("Book")
+    book.set_language("en")
+    chapter = epub.EpubHtml(uid="chapter", file_name="one.xhtml", title="Alpha")
+    chapter.content = (
+        '<html><head><title>Old title</title></head><body>'
+        '<h1 id="a">Alpha</h1><p>first</p>'
+        '<h1 id="b">Beta</h1><p>second</p></body></html>'
+    )
+    book.add_item(chapter)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.toc = (
+        epub.Link("one.xhtml#a", "Alpha", "one"),
+        epub.Link("one.xhtml#b", "Beta", "two"),
+    )
+    book.spine = ["nav", chapter]
+    source = tmp_path / "book.epub"
+    epub.write_epub(str(source), book)
+    loader = EPUBBookLoader(str(source), RecordingModel, "", False, "zh-hans")
+    loader.translate_tags = "h1,p"
+    loader.accumulated_num = 100
+    loader.accumulated_num_given = True
+    loader.accumulate_across_chapters = True
+    loader.single_translate = True
+    loader.make_bilingual_book()
+
+    assert loader.translate_model.calls.count("Alpha") == 1
+    assert loader.translate_model.calls.count("Beta") == 1
+    output = source.with_name("book_bilingual.epub")
+    assert [entry.title for entry in epub.read_epub(str(output)).toc] == [
+        "<T>Alpha</T>", "<T>Beta</T>"
+    ]
+
+
+def test_cross_chapter_resume_reuses_title_and_body_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr("book_maker.loader.epub_loader.num_tokens_from_text", len)
+    chapters = [("one.xhtml", ["one"]), ("two.xhtml", ["two"])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+
+    class StopAfterFirstBatch(RecordingModel):
+        def translate_list(self, texts):
+            if self.list_calls:
+                raise KeyboardInterrupt
+            return super().translate_list(texts)
+
+    interrupted, _ = _make_loader(
+        tmp_path, monkeypatch, chapters, model=StopAfterFirstBatch
+    )
+    interrupted.translate_metadata = True
+    interrupted.accumulated_num = 12
+    interrupted.accumulated_num_given = True
+    interrupted.accumulate_across_chapters = True
+    with pytest.raises(SystemExit) as exc:
+        interrupted.make_bilingual_book()
+    assert exc.value.code == 130
+    assert interrupted.p_to_save == ["<T>one</T>"]
+    recovery = tmp_path / "book_bilingual_temp.epub"
+    assert [entry.title for entry in epub.read_epub(str(recovery)).toc] == [
+        "Chapter 1 / <T>Chapter 1</T>", "Chapter 2"
+    ]
+
+    wrong_setting, _ = _make_loader(
+        tmp_path, monkeypatch, chapters, resume=True
+    )
+    with pytest.raises(ValueError, match="cross-chapter setting changed"):
+        wrong_setting.make_bilingual_book()
+
+    resumed, output = _make_loader(
+        tmp_path, monkeypatch, chapters, resume=True
+    )
+    resumed.translate_metadata = True
+    resumed.accumulated_num = 12
+    resumed.accumulated_num_given = True
+    resumed.accumulate_across_chapters = True
+    resumed.make_bilingual_book()
+    assert "Chapter 1" not in resumed.translate_model.calls
+    assert "one" not in resumed.translate_model.calls
+    assert [entry.title for entry in epub.read_epub(str(output)).toc] == [
+        "Chapter 1 / <T>Chapter 1</T>",
+        "Chapter 2 / <T>Chapter 2</T>",
+    ]
+
+
+def test_title_only_checkpoint_preserves_untranslated_body_language(tmp_path, monkeypatch):
+    from bs4 import BeautifulSoup
+    monkeypatch.setattr("book_maker.loader.epub_loader.num_tokens_from_text", len)
+    chapters = [("one.xhtml", ["one"])]
+    _write_epub_with_toc(tmp_path / "book.epub", chapters)
+
+    class StopOnBody(RecordingModel):
+        def translate(self, text):
+            if text == "one":
+                raise KeyboardInterrupt
+            return super().translate(text)
+
+    loader, _ = _make_loader(tmp_path, monkeypatch, chapters, model=StopOnBody)
+    original = BeautifulSoup(
+        loader.origin_book.get_item_with_href("one.xhtml").content, "html.parser"
+    ).html.get("lang")
+    loader.translate_metadata = True
+    loader.accumulated_num = 9
+    loader.accumulate_across_chapters = True
+    loader.single_translate = True
+    with pytest.raises(SystemExit):
+        loader.make_bilingual_book()
+    assert loader.p_to_save == []
+    assert loader._localized_cache
+    with zipfile.ZipFile(tmp_path / "book_bilingual_temp.epub") as archive:
+        recovery = BeautifulSoup(archive.read("EPUB/one.xhtml"), "html.parser")
+    assert recovery.title.get_text() == "<T>Chapter 1</T>"
+    assert recovery.p.get_text() == "one"
+    assert recovery.html.get("lang") == original
+
+
 def test_epub_sequential_sentence_mode_preserves_sentence_order(tmp_path, monkeypatch):
     loader, output = _make_loader(
         tmp_path,
@@ -609,6 +1154,92 @@ def test_epub_parallel_rejects_legacy_completion_order_checkpoint(
             resume=True,
             parallel_workers=2,
         )
+
+
+def _downgrade_checkpoint_to_v3(loader):
+    loader._save_progress()
+    with open(loader.bin_path, "rb") as checkpoint:
+        state = pickle.load(checkpoint)
+    state["version"] = 3
+    state.pop("localized_cache", None)
+    state.pop("cross_chapters", None)
+    original = pickle.dumps(state)
+    with open(loader.bin_path, "wb") as checkpoint:
+        checkpoint.write(original)
+    return original
+
+
+def _tag_checkpoint_v3(tmp_path, monkeypatch):
+    chapters = [("one.xhtml", ["one", "two"])]
+    loader, _ = _make_loader(tmp_path, monkeypatch, chapters)
+    plans = loader._build_translation_plan(
+        list(loader.origin_book.get_items_of_type(ITEM_DOCUMENT)), ["p"]
+    )
+    loader._planned_job_ids = [job.job_id for plan in plans for job in plan.jobs]
+    loader.p_to_save = ["<T>one</T>"]
+    return chapters, _downgrade_checkpoint_to_v3(loader)
+
+
+@pytest.mark.parametrize("budget", [1, 100])
+def test_v3_resume_preserves_translations_and_backs_up_before_upgrade(
+    tmp_path, monkeypatch, budget
+):
+    chapters, original = _tag_checkpoint_v3(tmp_path, monkeypatch)
+    resumed, output = _make_loader(tmp_path, monkeypatch, chapters, resume=True)
+    resumed.accumulated_num = budget
+    resumed.translate_metadata = True
+    assert resumed.p_to_save == ["<T>one</T>"]
+    assert resumed._localized_cache == {}
+    with open(resumed.bin_path, "rb") as checkpoint:
+        assert checkpoint.read() == original
+
+    resumed.make_bilingual_book()
+
+    assert "one" not in resumed.translate_model.calls
+    assert resumed.translate_model.calls.count("two") == 1
+    assert resumed._loaded_checkpoint_version == resumed.CHECKPOINT_VERSION
+    with open(f"{resumed.bin_path}.v3.bak", "rb") as backup:
+        assert backup.read() == original
+    assert "&lt;T&gt;one&lt;/T&gt;" in _document_texts(output)["one.xhtml"]
+
+
+@pytest.mark.parametrize("mismatch", ["source", "language"])
+def test_v3_resume_keeps_identity_checks_and_leaves_rejected_cache_untouched(
+    tmp_path, monkeypatch, mismatch
+):
+    chapters, original = _tag_checkpoint_v3(tmp_path, monkeypatch)
+    resumed, _ = _make_loader(tmp_path, monkeypatch, chapters, resume=True)
+    if mismatch == "source":
+        item = resumed.origin_book.get_item_with_href("one.xhtml")
+        item.content = item.content.replace(b"<p>one</p>", b"<p>changed</p>")
+        with pytest.raises(ValueError, match="filters changed"):
+            resumed.make_bilingual_book()
+    else:
+        resumed.language = "fr"
+        with pytest.raises(SystemExit):
+            resumed.make_bilingual_book()
+    assert resumed.translate_model.calls == []
+    with open(resumed.bin_path, "rb") as checkpoint:
+        assert checkpoint.read() == original
+
+
+def test_v3_plan_resume_retains_classification_fingerprint(tmp_path, monkeypatch):
+    chapters = [("one.xhtml", ["one", "two"])]
+    first, _ = _make_loader(tmp_path, monkeypatch, chapters)
+    first.plan_mode = True
+    first.translate_tags = "auto"
+    first.plan_classify = "all"
+    first.make_bilingual_book()
+    _downgrade_checkpoint_to_v3(first)
+
+    resumed, output = _make_loader(tmp_path, monkeypatch, chapters, resume=True)
+    resumed.plan_mode = True
+    resumed.translate_tags = "auto"
+    resumed.plan_classify = "all"
+    assert resumed._resume_plan_fingerprint == first._plan_fingerprint
+    resumed.make_bilingual_book()
+    assert resumed.translate_model.calls == []
+    assert "&lt;T&gt;one&lt;/T&gt;" in _document_texts(output)["one.xhtml"]
 
 
 def test_epub_parallel_saves_when_committed_prefix_crosses_interval(

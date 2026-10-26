@@ -936,6 +936,7 @@ def _make_loader(tmp_path, model_cls, book=ANIMAL_FARM):
     )
     loader.plan_mode = True
     loader.translate_tags = "auto"
+    loader.translate_metadata = False
     # a programmatic caller must pick a mode (the loader's own default is
     # "none", no plan mode); tests that exercise the plan JSON set "agent"
     loader.plan_classify = "all"
@@ -2131,6 +2132,7 @@ class TestEpubHardening:
         resumed.plan_mode = True
         resumed.translate_tags = "auto"
         resumed.plan_classify = "all"
+        resumed.translate_metadata = False
         assert len(resumed.p_to_save) == done
         resumed.make_bilingual_book()
 

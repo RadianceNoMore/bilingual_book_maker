@@ -12,9 +12,10 @@ from copy import copy
 from bs4.element import Tag
 from ebooklib import epub
 from lxml import etree
-from tenacity import retry, retry_if_exception, wait_exponential
+from tenacity import Retrying, retry, retry_if_exception, wait_exponential, stop_after_attempt
 
 from book_maker.translator.base_translator import BatchMismatch
+from book_maker.translation_quality import validate_translation_texts
 from book_maker.utils import language_code
 
 logging.basicConfig(level=logging.WARNING)
@@ -559,26 +560,66 @@ _URL_RE = re.compile(url_pattern)
 _URL_TAIL_RE = re.compile(r".*" + url_pattern + r"$")
 
 
-def translate_list_or_singles(model, texts):
-    """`model.translate_list(texts)`, with tag mode's own alignment fallback.
+def translate_list_or_singles(
+    model, texts, attempt=None, retry_one_by_one=None, language=None,
+    source_language=None,
+):
+    """Retry the same chunk up to three times; singles require an opt-in.
 
-    Plan mode answers a `BatchMismatch` with `_translate_texts_aligned`: it
-    halves the chunk and asks again, ~2x the batch instead of N singles. Tag
-    mode has no such ladder — `--accumulated_num > 1` calls `translate_list`
-    straight from `deal_old` — so the exception would escape and end a run
-    that used to repair itself. One local sweep of `translate()` calls is
-    what that repair was; it stays here, where the ladder cannot reach.
+    ``attempt`` lets plan mode validate marker and numeric alignment inside
+    the same policy. Unusable replies are never returned as saved progress.
     """
-    if not hasattr(model, "translate_list"):
-        return [model.translate(text) for text in texts]
-    try:
-        return model.translate_list(texts)
-    except BatchMismatch as e:
-        print(
-            f"[yellow]batch of {len(texts)} came back misaligned ({e}); "
-            f"translating one by one[/yellow]"
-        )
-        return [model.translate(text) for text in texts]
+    if not texts:
+        return []
+    singles = (getattr(model, "retry_one_by_one", False)
+               if retry_one_by_one is None else retry_one_by_one)
+
+    def checked(result):
+        if not getattr(model, "_fatal_error_detected", False):
+            if not isinstance(result, (list, tuple)) or len(result) != len(texts) or any(
+                src.strip() and (not isinstance(out, str) or not out.strip())
+                for src, out in zip(texts, result)
+            ):
+                raise BatchMismatch("chunk reply has missing or empty translations")
+            validate_translation_texts(
+                texts,
+                result,
+                language or getattr(model, "language", None),
+                source_language or getattr(model, "source_lang", None),
+            )
+        return result
+
+    def run():
+        if attempt is not None:
+            return checked(attempt())
+        if hasattr(model, "translate_list"):
+            return checked(model.translate_list(texts))
+        return checked([model.translate(text) for text in texts])
+
+    if singles:
+        try:
+            return run()
+        except Exception as error:
+            if not _is_retryable(error) or getattr(model, "_fatal_error_detected", False):
+                raise
+            print(f"[yellow]Batch failed ({error}); retrying one by one[/yellow]")
+            return checked([model.translate(text) for text in texts])
+
+    for retry_attempt in Retrying(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8),
+        retry=retry_if_exception(lambda error: _is_retryable(error)
+                                and not getattr(model, "_fatal_error_detected", False)),
+        before_sleep=_say_chunk_retrying, reraise=True,
+    ):
+        with retry_attempt:
+            return run()
+
+
+def _say_chunk_retrying(state):
+    logger.warning(
+        "Chunk failed (%s); retrying the entire chunk: attempt %d/3 in %.0fs",
+        state.outcome.exception(), state.attempt_number + 1, state.next_action.sleep,
+    )
 
 
 def is_text_link(text):

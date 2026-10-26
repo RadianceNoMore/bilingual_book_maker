@@ -63,8 +63,10 @@ def _env():
 
 
 def _cli(*args):
+    source = Path(args[args.index("--book_name") + 1]) if "--book_name" in args else REPO
     return subprocess.run(
-        [sys.executable, "make_book.py", *args],
+        [sys.executable, "make_book.py", "--no-copy-source",
+         "--output-dir", str(source.parent), *args],
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -80,6 +82,61 @@ def _book(tmp_path, source=BOOK):
 
 def _flat(proc):
     return " ".join((proc.stdout + proc.stderr).split())
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ([], "requires an EPUB and --accumulated_num above 1"),
+        (["--accumulated_num", "1"], "requires an EPUB and --accumulated_num above 1"),
+        (["--accumulated_num", "100", "--parallel-workers", "2"],
+         "cannot be combined with --parallel-workers"),
+    ],
+)
+def test_cross_chapter_flag_rejects_invalid_combinations(extra, message):
+    proc = _cli(
+        "--book_name", str(BOOK), "--accumulate-across-chapters", *extra
+    )
+    assert proc.returncode != 0
+    assert message in _flat(proc)
+
+
+def test_cli_cross_chapter_run_localizes_toc(tmp_path):
+    from ebooklib import epub
+
+    book = epub.EpubBook()
+    book.set_identifier("cross-cli")
+    book.set_title("Book title")
+    book.set_language("en")
+    chapters = []
+    for index in (1, 2):
+        chapter = epub.EpubHtml(
+            uid=f"chapter-{index}", file_name=f"chapter-{index}.xhtml",
+            title=f"Chapter {index}", lang="en",
+        )
+        chapter.content = f"<html><body><p>Text {index}</p></body></html>"
+        book.add_item(chapter)
+        chapters.append(chapter)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.toc = tuple(
+        epub.Link(chapter.file_name, chapter.title, chapter.id)
+        for chapter in chapters
+    )
+    book.spine = ["nav", *chapters]
+    source = tmp_path / "cross.epub"
+    epub.write_epub(str(source), book)
+
+    proc = _cli(
+        "--book_name", str(source), "--api_format", "google",
+        "--language", "fr", "--single_translate", "--quiet",
+        "--accumulated_num", "100", "--accumulate-across-chapters",
+    )
+    assert proc.returncode == 0, _flat(proc)
+    result = epub.read_epub(str(tmp_path / "cross_bilingual.epub"))
+    assert [entry.title for entry in result.toc] == [
+        "[offline]Chapter 1", "[offline]Chapter 2"
+    ]
 
 
 # --------------------------------------------------------------- the facts
@@ -151,9 +208,8 @@ class TestStops:
         assert proc.returncode == 1
         assert "broken on epub" in _flat(proc)
 
-    def test_parallel_accumulated_resume_records_nothing(self, tmp_path):
-        # A4: the parallel accumulating path never records a translation
-        # result, so the checkpoint --resume wants is never written
+    def test_parallel_accumulated_resume_is_refused(self, tmp_path):
+        # A4: parallel accumulating workers do not replay cached body batches.
         proc = _cli(
             "--book_name",
             str(_book(tmp_path)),
@@ -166,7 +222,7 @@ class TestStops:
             "--resume",
         )
         assert proc.returncode == 1
-        assert "records no progress at all" in _flat(proc)
+        assert "cannot safely replay cached batches" in _flat(proc)
 
     def test_two_of_the_three_are_fine(self, tmp_path):
         # only the triple is refused: the pairs each work

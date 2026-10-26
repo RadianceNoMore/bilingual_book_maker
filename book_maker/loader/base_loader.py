@@ -1,6 +1,7 @@
 import json
 import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 
 class BaseBookLoader(ABC):
@@ -12,11 +13,19 @@ class BaseBookLoader(ABC):
     # join with a newline; srt separates its blocks with a blank line.
     SAVE_FILE_SEPARATOR = "\n"
 
+    def output_path(self, path):
+        """CLI output directory; direct loader callers retain their old paths."""
+        directory = getattr(self, "output_dir", None)
+        if directory is None:
+            return str(path)
+        return str(Path(directory) / Path(path).name)
+
     @staticmethod
     def _is_special_text(text):
         return text.isdigit() or text.isspace()
 
     def save_file(self, book_path, content):
+        book_path = self.output_path(book_path)
         try:
             with open(book_path, "w", encoding="utf-8") as f:
                 f.write(self.SAVE_FILE_SEPARATOR.join(content))
@@ -26,10 +35,8 @@ class BaseBookLoader(ABC):
     def announce_saved_book(self, path):
         """The last line of a finished run: the file it produced, in full.
 
-        Every writer below names its output relative to the source book, so
-        a caller that started somewhere else — a script, an agent, a shell in
-        another directory — had to reconstruct where the file landed, and a
-        run that wrote nothing looked exactly like one that did. Called at
+        Resolve the CLI's output directory before announcing the full path.
+        Direct loader callers can still write beside their source. Called at
         the point the file exists, on the success path only, and at most once
         per run: several writers may write the same book (a batched epub run
         writes it twice), and one run produces one announcement.
@@ -41,7 +48,7 @@ class BaseBookLoader(ABC):
         if self._announced_saved_book:
             return
         self._announced_saved_book = True
-        print(f"Bilingual book saved: {os.path.abspath(path)}")
+        print(f"Bilingual book saved: {os.path.abspath(self.output_path(path))}")
 
     @abstractmethod
     def _make_new_book(self, book):

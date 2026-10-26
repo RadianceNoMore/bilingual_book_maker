@@ -53,8 +53,12 @@ def _env():
 
 
 def _cli(*args):
+    # These contracts exercise flags independent of workspace defaults.
+    # Keep their per-test source/plan/output layout explicit and isolated.
+    source = Path(args[args.index("--book_name") + 1]) if "--book_name" in args else REPO
     return subprocess.run(
-        [sys.executable, "make_book.py", *args],
+        [sys.executable, "make_book.py", "--no-copy-source",
+         "--output-dir", str(source.parent), *args],
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -566,7 +570,8 @@ def _cli_in(cwd, *args, **extra_env):
     env["PYTHONPATH"] = os.pathsep.join([str(HERMETIC), str(REPO), env["PYTHONPATH"]])
     env.update(extra_env)
     return subprocess.run(
-        [sys.executable, str(REPO / "make_book.py"), *args],
+        [sys.executable, str(REPO / "make_book.py"), "--no-copy-source",
+         "--output-dir", str(cwd), *args],
         cwd=str(cwd),
         capture_output=True,
         text=True,
@@ -643,7 +648,7 @@ def test_an_unknown_provider_names_both_config_files(tmp_path):
     assert proc.returncode != 0
     assert "ghost" in output
     assert "bbm_providers.json" in output
-    assert ".bbm/providers.json" in output
+    assert ".bbm/providers.json" in output.replace("\\", "/")
 
 
 def test_orcarouter_needs_no_endpoint_and_reads_its_own_key(tmp_path):

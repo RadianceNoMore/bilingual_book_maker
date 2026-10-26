@@ -4,6 +4,27 @@
 
 **中文 | [English](./README.md)**
 
+译本默认保存到 `./output`；使用 `--output-dir PATH`（别名 `--output_dir`）
+可指定其他目录。翻译前会将源文件复制到 `./input`，检查点和计划也保存在此处；
+可用 `--input-dir PATH` 更改目录。`--resume` 会复制原文件旁的检查点，
+但不会覆盖工作目录中已有的进度。原文件移动后，可使用
+`--book_name ./input/BOOK.epub --resume` 继续。路径相对于当前工作目录；
+使用 `--no-copy-source` 可直接读取原文件。
+
+EPUB 默认清理已确认的混淆联系方式编码，保留普通广告并正常翻译。
+使用 `--strip-obfuscated-codes off` 可关闭清理；启用时可继续现有检查点，原始文件保持不变。
+
+EPUB 使用 LLM 接口时，`--whole-chapter` 将每个 XHTML 章节中选中的文本
+合并为一个请求，优先于 `--accumulated_num` 和单元数量限制。
+此模式需要单线程，并移除 `--accumulate-across-chapters`；章节必须能放入模型的
+上下文和输出限制。失败后默认完整重试同一批文本，最多三次；显式添加
+`--retry-one-by-one` 才会逐段重试。重试耗尽后保存进度并停止。
+
+翻译批次会检查回复中占多数的源文字母系统、明显错误的目标语言，以及泄露的指令或 Markdown。
+对不同文字系统按字母比例检查；法语和英语等共用字母的语言则使用语言识别。
+保存新批次和发布缓存译文前都会检查。它只能发现可能的错误，不能证明翻译准确性。
+默认会先批量翻译目录和导航标题，再单独翻译章节正文，并将已确认的标题译文复用到对应章标题和书籍元数据。
+
 bilingual_book_maker 是一个 AI 翻译工具，使用 ChatGPT 帮助用户制作多语言版本的 epub/txt/md/srt/pdf 文件和图书。请仅将其用于您有权翻译的内容——您持有必要权利的作品、许可或授权允许您翻译的作品、公有领域图书，或适用法律另行允许的使用方式。请在使用之前阅读项目的 **[免责声明](./disclaimer.md)**。
 
 [![Stars](https://img.shields.io/github/stars/yihong0618/bilingual_book_maker)](https://github.com/yihong0618/bilingual_book_maker/stargazers)
@@ -393,6 +414,14 @@ codex "你好，请使用bbm-plan帮我将这本书：test_books/animal_farm.epu
   例如，如果您使用`--accumulated_num 1600`，则可能会输出2200个令牌，另外200个令牌用于系统指令（system_message）和用户指令（user_message），1600+2200+200 = 4000，在某些本地模型中token接近极限。你必须选择一个自己合适的值，我们无法在发送之前判断是否达到限制。
 
   在 EPUB 计划模式下这是每个请求的 token 预算：连续的段落（不限长度）合并进同一个请求，直到累计 `N` 个 token。传 `1` 可关闭合并，即每分段单独发送。
+
+- `--accumulate-across-chapters`：
+
+  允许 EPUB 的一个累计请求跨越章节边界。必须显式设置 `--accumulated_num N`，且 `N > 1`。支持标签模式和计划模式的翻译；不能与 `--parallel-workers` 或 `--plan-dry-run` 一起使用。
+
+- `--no-translate-metadata`：
+
+  保留原文的目录标签、文档标题和书籍标题、简介、主题等元数据。默认会自动翻译并同步这些内容，无需再运行 `fix_en_metadata.py`。双语输出保留原文和译文；`--single_translate` 仅使用译文。
 
 - `--use_context`:
   使用上下文模式翻译。

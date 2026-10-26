@@ -13,6 +13,7 @@ from rich import print
 from rich.markup import escape
 
 from book_maker.glossary import Glossary
+from book_maker.workspace import prepare_source
 from book_maker.loader import BOOK_LOADER_DICT
 from book_maker.legacy_cli import translate_legacy_argv
 from book_maker.loader.classify import can_session_classify
@@ -1097,9 +1098,8 @@ COMPAT_RULES = (
         and (f.options.accumulated_num or 0) > 1
         and f.options.resume,
         lambda f: (
-            "--parallel-workers with --accumulated_num above 1 records no "
-            "progress at all, so --resume has nothing to continue and an "
-            "interrupted run pays for the whole book again. Drop one of the "
+            "--parallel-workers with --accumulated_num above 1 cannot "
+            "safely replay cached batches with --resume. Drop one of the "
             "three: --parallel-workers, --accumulated_num or --resume."
         ),
     ),
@@ -1699,6 +1699,18 @@ def build_parser():
     # No prefix abbreviation: `--model` must not resolve to `--model_list`.
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument(
+        "--output-dir", "--output_dir", default="output",
+        help="directory for translated books (default: ./output)",
+    )
+    parser.add_argument(
+        "--input-dir", default="input",
+        help="directory for working source copies and resume files (default: ./input)",
+    )
+    parser.add_argument(
+        "--no-copy-source", action="store_true",
+        help="read the original source directly instead of copying it into ./input",
+    )
+    parser.add_argument(
         "--book_name",
         dest="book_name",
         type=str,
@@ -1945,6 +1957,28 @@ keep the un-halved value: 1600-2000 is their measured default. The run
 narrates the number and the route class it chose; pass 1 to turn grouping
 off. Minimum 1.
 """,
+    )
+    parser.add_argument(
+        "--accumulate-across-chapters",
+        action="store_true",
+        help="EPUB only: let --accumulated_num batches continue into the next chapter (sequential execution only).",
+    )
+    parser.add_argument(
+        "--whole-chapter", action="store_true",
+        help="EPUB: send each selected XHTML chapter in one request, overriding grouping budgets",
+    )
+    parser.add_argument(
+        "--strip-obfuscated-codes", choices=("on", "off"), default="on",
+        help="EPUB: remove recognized obfuscated contact codes before translation and from output (default: on); ordinary advertisements are preserved",
+    )
+    parser.add_argument(
+        "--retry-one-by-one", action="store_true",
+        help="retry failed EPUB batches paragraph by paragraph; default retries the whole chunk up to three times",
+    )
+    parser.add_argument(
+        "--no-translate-metadata",
+        action="store_true",
+        help="Keep source EPUB titles, table of contents, and descriptive metadata.",
     )
     parser.add_argument(
         "--max-batch-units",
@@ -2244,9 +2278,23 @@ def main():
     if not options.book_name:
         print("Error: please provide the path of your book using --book_name <path>")
         exit(1)
+    if not options.no_copy_source:
+        try:
+            options.book_name = str(prepare_source(
+                options.book_name, options.input_dir, options.resume
+            ))
+        except (OSError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        print(f"Working source: {escape(options.book_name)}")
     if not os.path.isfile(options.book_name):
         print(f"Error: the book {options.book_name!r} does not exist.")
         exit(1)
+
+    if options.plan_dry_run and (options.accumulate_across_chapters or options.whole_chapter):
+        raise SystemExit(
+            "--plan-dry-run cannot preview cross-chapter or whole-chapter requests; "
+            "use --test to preview the selected request mode"
+        )
 
     if options.plan_dry_run:
         # No translation happens, so no credentials are needed: build the
@@ -2436,6 +2484,27 @@ def main():
         exit(1)
 
     book_type = get_book_type(options.book_name)
+    if options.retry_one_by_one and book_type != "epub":
+        raise SystemExit("--retry-one-by-one applies to EPUB batches only")
+    if options.whole_chapter:
+        if book_type != "epub" or api_format not in LLM_FORMATS:
+            raise SystemExit("--whole-chapter requires an EPUB and an LLM API format")
+        if options.accumulate_across_chapters or options.parallel_workers > 1:
+            raise SystemExit(
+                "--whole-chapter requires sequential chapters; remove "
+                "--accumulate-across-chapters and use --parallel-workers 1"
+            )
+        if options.sentence_mode or options.batch_flag or options.batch_use_flag or options.retranslate:
+            raise SystemExit("--whole-chapter cannot be combined with sentence, batch-job, or retranslate modes")
+    if options.accumulate_across_chapters:
+        if book_type != "epub" or not accumulated_num_given or options.accumulated_num <= 1:
+            raise SystemExit(
+                "--accumulate-across-chapters requires an EPUB and --accumulated_num above 1"
+            )
+        if options.parallel_workers > 1:
+            raise SystemExit(
+                "--accumulate-across-chapters cannot be combined with --parallel-workers"
+            )
     support_type_list = list(BOOK_LOADER_DICT.keys())
     if book_type not in support_type_list:
         raise Exception(
@@ -2582,6 +2651,8 @@ def main():
         parallel_workers=options.parallel_workers,
         **loader_kwargs,
     )
+    e.output_dir = Path(options.output_dir).expanduser().resolve()
+    e.output_dir.mkdir(parents=True, exist_ok=True)
     if options.glossary_path:
         # The translation metadata record embeds the operator's file (never a derived
         # glossary), and the loader only knows about it through this
@@ -2771,6 +2842,14 @@ def main():
         # the translator enforces the same cap per request when the endpoint
         # is below strict decoding, and it is halved there too
         e.translate_model.substrict_batch_cap = max(1, batch_units // 2)
+    if book_type == "epub":
+        e.strip_obfuscated_codes = options.strip_obfuscated_codes == "on"
+        e.accumulate_across_chapters = options.accumulate_across_chapters
+        e.translate_metadata = not options.no_translate_metadata
+        e.whole_chapter = options.whole_chapter
+        e.retry_one_by_one = options.retry_one_by_one
+        e.translate_model.whole_chapter = options.whole_chapter
+        e.translate_model.retry_one_by_one = options.retry_one_by_one
     if options.translation_color:
         e.translation_style = f"color: {options.translation_color};"
     if options.translation_style:

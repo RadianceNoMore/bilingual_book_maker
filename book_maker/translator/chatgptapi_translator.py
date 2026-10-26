@@ -1396,7 +1396,7 @@ class ChatGPTAPI(Base):
         degree = self._structured_enabled()
         if degree and degree not in SCHEMA_BATCH_DEGREES:
             cap = self.substrict_batch_cap
-            if plist_len > cap:
+            if plist_len > cap and not getattr(self, "whole_chapter", False):
                 # Tag mode sizes batches by characters and plan mode may have
                 # sized this one for a schema-degree model before rotation.
                 # Either way the json-degree cap is a per-*request* bound, so
@@ -1416,29 +1416,26 @@ class ChatGPTAPI(Base):
         except StructuredOutputUnsupported as e:
             # Capability answer, not a transient failure: stop paying for it.
             self._demote_structured_outputs(e)
-            return [self.translate(t, False) for t in text_list]
+            return self._do_batch_translate(
+                text_list, self.prompt_template, self._system_message(),
+                self.DEFAULT_PROMPT, lambda text: self.translate(text, False),
+            )
         except BatchMismatch:
-            # The reply arrived and did not answer the request. That is the
-            # loader's ladder's business — it halves the chunk — so it must
-            # not be swallowed into a per-paragraph sweep here. Raised from
+            # The reply arrived and did not answer the request. The loader
+            # retries the same chunk, so do not repair individual slots here. Raised from
             # inside the request only at the json degree, where the parse is
             # ours rather than the SDK's.
             raise
         except Exception as e:
-            # A refusal, or a transport failure that outlived its retries.
-            # Neither says the batch came back misaligned, so this is not the
-            # loader's ladder's business: translate the paragraphs one by one
-            # and let the run continue.
-            print(
-                f"[yellow]Structured batch translation failed after retries: {e}. "
-                f"Falling back to one-by-one translation.[/yellow]"
-            )
-            return [self.translate(t, False) for t in text_list]
+            # The loader retries this same group; only an explicit opt-in
+            # permits falling back to individual paragraph calls.
+            if getattr(self, "retry_one_by_one", False):
+                print(f"[yellow]Batch failed ({e}); retrying one by one[/yellow]")
+                return [self.translate(t, False) for t in text_list]
+            raise
 
-        # Outside the retry on purpose. tenacity re-sends transport failures;
-        # a miscounted or misaligned answer is a model error, and asking the
-        # same model the same question again mostly buys the same answer at
-        # the same price. The loader's ladder halves the chunk instead.
+        # Transport retries happen within the provider. Alignment failures
+        # reach the loader, which owns retries of the complete chunk.
         paragraphs = self._align_batch_items(text_list, items)
 
         if self.context_flag:
@@ -1497,10 +1494,8 @@ class ChatGPTAPI(Base):
         The last two are what session mode records — and only after the
         caller has found the items usable.
 
-        A reply that came back and did not answer the request is a
-        `BatchMismatch`, never a retry: re-asking the same model the same
-        question buys the same answer at the same price, and the loader
-        halves the chunk instead.
+        A reply that did not answer the request raises `BatchMismatch` to
+        the loader, which retries the complete chunk under the chosen policy.
         """
         self.rotate_key()
         self.rotate_model()
@@ -1521,7 +1516,7 @@ class ChatGPTAPI(Base):
             # batch — where sending it re-opens the oversized-batch
             # corruption the cap bounds.
             cap = self.substrict_batch_cap
-            if plist_len > cap:
+            if plist_len > cap and not getattr(self, "whole_chapter", False):
                 raise BatchMismatch(
                     f"batch of {plist_len} exceeds the json-degree cap of "
                     f"{cap} units for '{self.model}'"

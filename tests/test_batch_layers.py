@@ -453,6 +453,7 @@ class TestTagModeBatchMismatch:
     def _model(self):
         class Model:
             TRANSLATION_ERROR_MARKER = None
+            retry_one_by_one = True
 
             def __init__(self):
                 self.singles = []

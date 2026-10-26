@@ -35,6 +35,9 @@ def test_pdf_cli_creates_txt_and_optional_epub(tmp_path):
         [
             sys.executable,
             "make_book.py",
+            "--no-copy-source",
+            "--output-dir",
+            str(tmp_path),
             "--book_name",
             str(pdf_path),
             "--test",

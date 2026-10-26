@@ -557,7 +557,10 @@ class Gemini(Base):
             self._check_batch(text_list, merged)
             return merged
 
-        # Fallback to one-by-one translation (only for non-fatal errors)
+        if not getattr(self, "retry_one_by_one", False):
+            raise BatchMismatch("Gemini returned no usable translations for the chunk")
+
+        # Fallback to one-by-one translation (explicit opt-in only)
         print(
             "Batch translation failed after all retry attempts. "
             "Falling back to one-by-one translation."

@@ -513,12 +513,13 @@ def test_refusal_retranslates_plainly_instead_of_ending_the_run():
     assert translator.capabilities.verdicts["test-model"] == "strict"
 
 
-def test_batch_refusal_is_not_retried_before_falling_back():
+def test_batch_refusal_uses_singles_only_when_enabled():
     """The batch caller already degrades to one-by-one; retrying a refusal
     three times first only buys three more refusals."""
     parse = Mock(return_value=_parsed_completion(refusal="nope"))
     create = Mock(return_value=_completion("plain"))
     translator = _translator(create=create, parse=parse)
+    translator.retry_one_by_one = True
     translator.capabilities.verdicts["test-model"] = "strict"
 
     assert translator._do_structured_batch_translate(["a", "b"]) == ["plain"] * 2
@@ -529,6 +530,31 @@ def test_batch_refusal_is_not_retried_before_falling_back():
     ]
     assert len(batch_calls) == 1
     assert translator.capabilities.verdicts["test-model"] == "strict"
+
+
+def test_batch_refusal_reaches_chunk_retry_policy_by_default():
+    from book_maker.translator.capabilities import StructuredRefusal
+
+    parse = Mock(return_value=_parsed_completion(refusal="nope"))
+    translator = _translator(parse=parse)
+    translator.capabilities.verdicts["test-model"] = "strict"
+    translator.translate = Mock()
+    with pytest.raises(StructuredRefusal):
+        translator._do_structured_batch_translate(["a", "b"])
+    translator.translate.assert_not_called()
+
+
+def test_whole_chapter_bypasses_json_unit_cap_in_one_request():
+    translator = _translator()
+    translator.capabilities.verdicts["test-model"] = "json"
+    translator.whole_chapter = True
+    translator.substrict_batch_cap = 2
+    texts = [f"paragraph {i}" for i in range(20)]
+    items = [SimpleNamespace(id=i, **{SINGLE_FIELD: f"t:{text}"})
+             for i, text in enumerate(texts)]
+    translator._execute_json_object_batch = Mock(return_value=(items, "user", "reply"))
+    assert translator.translate_list(texts) == [f"t:{text}" for text in texts]
+    translator._execute_json_object_batch.assert_called_once()
 
 
 # --------------------------------------------------------------------------
@@ -573,15 +599,20 @@ def test_a_working_structured_call_clears_the_failure_streak():
 
 
 def test_batch_path_demotes_without_burning_retries():
+    from book_maker.translator.base_translator import BATCH_DELIMITER
+
     parse = Mock(side_effect=StructuredOutputUnsupported("server ignored schema"))
     translator = _translator(parse=parse)
     translator.capabilities.verdicts["test-model"] = "strict"
-    translator.translate = Mock(side_effect=lambda text, _=True: f"t:{text}")
+    translator.translate = Mock(side_effect=lambda text, _=True: BATCH_DELIMITER.join(
+        f"t:{part}" for part in text.split(BATCH_DELIMITER)
+    ))
 
     assert translator._do_structured_batch_translate(["a", "b"]) == ["t:a", "t:b"]
     assert translator._do_structured_batch_translate(["a", "b"]) == ["t:a", "t:b"]
 
     assert parse.call_count == 2  # one attempt each, not 3 tenacity attempts
+    assert translator.translate.call_count == 2  # two whole delimiter batches
     assert translator.capabilities.verdicts["test-model"] is False
 
 
