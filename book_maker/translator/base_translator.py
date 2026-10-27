@@ -57,9 +57,10 @@ class BatchMismatch(Exception):
     """A batch reply cannot be aligned with the texts that were sent.
 
     The one contract every LLM route's `translate_list` keeps: exactly
-    `len(texts)` aligned items, or this. Nobody repairs it where it is
-    raised — the loader retries the same complete chunk. Individual
-    paragraph retries require the operator's explicit opt-in.
+    `len(texts)` aligned items, or this. The loader retries the complete
+    chunk, then may divide a persistently misaligned chunk into smaller
+    groups. Individual paragraph retries require the operator's explicit
+    opt-in.
     """
 
 

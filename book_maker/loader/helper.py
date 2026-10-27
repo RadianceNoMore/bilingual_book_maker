@@ -559,18 +559,27 @@ url_pattern = r"(http[s]?://|www\.)+(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0
 _URL_RE = re.compile(url_pattern)
 _URL_TAIL_RE = re.compile(r".*" + url_pattern + r"$")
 
+DEFAULT_CHUNK_ATTEMPTS = 5
+
 
 def translate_list_or_singles(
     model, texts, attempt=None, retry_one_by_one=None, language=None,
-    source_language=None,
+    source_language=None, max_attempts=None,
 ):
-    """Retry the same chunk up to three times; singles require an opt-in.
+    """Retry the same chunk up to its attempt limit (five by default).
 
     ``attempt`` lets plan mode validate marker and numeric alignment inside
-    the same policy. Unusable replies are never returned as saved progress.
+    the same policy. Unusable replies are never returned as saved progress;
+    paragraph-by-paragraph fallback requires an opt-in.
     """
     if not texts:
         return []
+    if max_attempts is None:
+        max_attempts = getattr(model, "max_chunk_attempts", None)
+    if max_attempts is None:
+        max_attempts = DEFAULT_CHUNK_ATTEMPTS
+    if not isinstance(max_attempts, int) or max_attempts < 1:
+        raise ValueError("max_chunk_attempts must be a positive integer")
     singles = (getattr(model, "retry_one_by_one", False)
                if retry_one_by_one is None else retry_one_by_one)
 
@@ -606,19 +615,20 @@ def translate_list_or_singles(
             return checked([model.translate(text) for text in texts])
 
     for retry_attempt in Retrying(
-        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8),
+        stop=stop_after_attempt(max_attempts), wait=wait_exponential(multiplier=1, min=2, max=8),
         retry=retry_if_exception(lambda error: _is_retryable(error)
                                 and not getattr(model, "_fatal_error_detected", False)),
-        before_sleep=_say_chunk_retrying, reraise=True,
+        before_sleep=lambda state: _say_chunk_retrying(state, max_attempts), reraise=True,
     ):
         with retry_attempt:
             return run()
 
 
-def _say_chunk_retrying(state):
+def _say_chunk_retrying(state, max_attempts=DEFAULT_CHUNK_ATTEMPTS):
     logger.warning(
-        "Chunk failed (%s); retrying the entire chunk: attempt %d/3 in %.0fs",
-        state.outcome.exception(), state.attempt_number + 1, state.next_action.sleep,
+        "Chunk failed (%s); retrying the entire chunk: attempt %d/%d in %.0fs",
+        state.outcome.exception(), state.attempt_number + 1, max_attempts,
+        state.next_action.sleep,
     )
 
 

@@ -1,7 +1,8 @@
 ﻿#Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [switch]$Resume
+    [switch]$Resume,
+    [int]$ChunkAttempts = 5
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,7 +22,8 @@ $translationArgs = @(
     '--translate-tags', 'h1,h2,p',
     '--whole-chapter',
     '--use_context', 'session',
-    '--glossary-auto', 'on'
+    '--glossary-auto', 'on',
+    '--max-chunk-attempts', "$ChunkAttempts"
 )
 
 if ($Resume) {

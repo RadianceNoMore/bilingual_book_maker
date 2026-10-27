@@ -21,8 +21,12 @@ For EPUBs on an LLM endpoint, `--whole-chapter` sends each XHTML chapter's
 selected text together, overriding `--accumulated_num` and unit limits.
 Remove `--accumulate-across-chapters` and use one worker for this mode.
 The chapter must fit the model's context and output limits. Failed chunks
-are retried intact up to three times; `--retry-one-by-one` opts into
-individual paragraph retries instead. Exhausted retries save progress and stop.
+are retried intact for up to five total attempts by default, configurable
+with `--max-chunk-attempts N`. If the reply still has an alignment mismatch,
+the loader retries smaller groups while keeping at least two units together.
+It never switches to single-paragraph requests unless `--retry-one-by-one` is
+set. If the smallest group cannot be aligned, progress is saved and the run
+stops.
 
 Translation chunks are checked for source-only script letters that make up
 at least half of a reply, likely wrong-language prose, and leaked instructions

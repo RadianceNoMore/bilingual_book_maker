@@ -46,6 +46,7 @@ from book_maker.utils import (
 
 from .base_loader import BaseBookLoader
 from .helper import (
+    DEFAULT_CHUNK_ATTEMPTS,
     stamp_translation,
     restamp_language,
     EPUBBookLoaderHelper,
@@ -113,6 +114,11 @@ from .classify import (
     decide_everything,
     mode_policy,
 )
+
+# After a model has repeatedly failed to return the same number of batch
+# translations, retry in smaller groups. Stop at pairs so this recovery
+# never silently turns into paragraph-by-paragraph translation.
+ALIGNMENT_FALLBACK_MIN_UNITS = 2
 
 # Every key-bearing CLI flag, and the environment variable it falls back to
 # when it is absent. The rerun line printed at a plan handoff is rebuilt from
@@ -367,6 +373,7 @@ class EPUBBookLoader(BaseBookLoader):
         self.accumulate_across_chapters = False
         self.whole_chapter = False
         self.retry_one_by_one = False
+        self.max_chunk_attempts = DEFAULT_CHUNK_ATTEMPTS
         self.translate_metadata = True
         self._localized_cache = {}
         self._toc_job_translations = {}
@@ -2411,16 +2418,49 @@ class EPUBBookLoader(BaseBookLoader):
                 result = [strip_codes(value) for value in result]
             return result
 
-        return translate_list_or_singles(
-            translator, texts,
-            attempt=attempt,
-            retry_one_by_one=(
-                getattr(self, "retry_one_by_one", False)
-                if retry_one_by_one is None else retry_one_by_one
-            ),
-            language=getattr(self, "language", None) or getattr(self, "language_tag", None),
-            source_language=getattr(self, "source_lang", None),
+        one_by_one = (
+            getattr(self, "retry_one_by_one", False)
+            if retry_one_by_one is None else retry_one_by_one
         )
+        try:
+            return translate_list_or_singles(
+                translator, texts,
+                attempt=attempt,
+                retry_one_by_one=one_by_one,
+                language=getattr(self, "language", None) or getattr(self, "language_tag", None),
+                source_language=getattr(self, "source_lang", None),
+                max_attempts=getattr(self, "max_chunk_attempts", None),
+            )
+        except UntranslatedTextError:
+            # A smaller request cannot make a returned source-language answer
+            # safe to accept. Keep this guardrail loud and checkpointable.
+            raise
+        except BatchMismatch as error:
+            # Only split when both children can keep at least two units;
+            # otherwise an odd-sized chunk could silently create a singleton.
+            if one_by_one or len(texts) < 2 * ALIGNMENT_FALLBACK_MIN_UNITS:
+                raise
+
+            midpoint = len(texts) // 2
+            print(
+                f"[yellow]Batch of {len(texts)} still had an alignment mismatch "
+                f"after {getattr(self, 'max_chunk_attempts', DEFAULT_CHUNK_ATTEMPTS)} "
+                f"whole-chunk attempts ({error}); retrying as smaller "
+                f"groups of {midpoint} and {len(texts) - midpoint} units. "
+                f"Automatic recovery never creates a one-unit group; "
+                f"single-paragraph retries require --retry-one-by-one.[/yellow]"
+            )
+            left_units = units[:midpoint] if units is not None else None
+            right_units = units[midpoint:] if units is not None else None
+            left = self._translate_cleaned_texts_aligned(
+                texts[:midpoint], translator, left_units, batch_function,
+                retry_one_by_one=False,
+            )
+            right = self._translate_cleaned_texts_aligned(
+                texts[midpoint:], translator, right_units, batch_function,
+                retry_one_by_one=False,
+            )
+            return left + right
 
     def _translate_texts_attempt(
         self, texts, translator=None, units=None, batch_function=None

@@ -15,6 +15,7 @@ from rich.markup import escape
 from book_maker.glossary import Glossary
 from book_maker.workspace import prepare_source
 from book_maker.loader import BOOK_LOADER_DICT
+from book_maker.loader.helper import DEFAULT_CHUNK_ATTEMPTS
 from book_maker.legacy_cli import translate_legacy_argv
 from book_maker.loader.classify import can_session_classify
 from book_maker.loader.ledger import PlanLedgerError
@@ -703,6 +704,19 @@ def batch_unit_cap(value):
     return units
 
 
+def chunk_attempt_count(value):
+    """argparse type for --max-chunk-attempts (includes the first request)."""
+    try:
+        attempts = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {value!r}")
+    if attempts < 1:
+        raise argparse.ArgumentTypeError(
+            "chunk attempts must be at least 1 (the initial request counts)"
+        )
+    return attempts
+
+
 class DeprecatedAlias(argparse.Action):
     """An old spelling of a flag: same dest, plus a record that it was typed.
 
@@ -1148,6 +1162,7 @@ COMPAT_RULES = (
         "warn",
         lambda f: session_run_expected(f)
         and not f.plan_mode
+        and not f.options.whole_chapter
         and (f.options.accumulated_num or 1) <= 1,
         lambda f: (
             f"{_session_run_source(f)} outside plan mode leaves grouping "
@@ -1972,8 +1987,14 @@ off. Minimum 1.
         help="EPUB: remove recognized obfuscated contact codes before translation and from output (default: on); ordinary advertisements are preserved",
     )
     parser.add_argument(
+        "--max-chunk-attempts",
+        type=chunk_attempt_count,
+        default=DEFAULT_CHUNK_ATTEMPTS,
+        help=f"maximum complete-chunk attempts before alignment fallback (default: {DEFAULT_CHUNK_ATTEMPTS}; includes the first request)",
+    )
+    parser.add_argument(
         "--retry-one-by-one", action="store_true",
-        help="retry failed EPUB batches paragraph by paragraph; default retries the whole chunk up to three times",
+        help="retry failed EPUB batches paragraph by paragraph; default retries the whole chunk up to --max-chunk-attempts",
     )
     parser.add_argument(
         "--no-translate-metadata",
@@ -2826,6 +2847,11 @@ def main():
     # so a sidecar boot or a context-window lookup cannot precede it.
     if hasattr(e, "check_file_filters"):
         e.check_file_filters()
+    if hasattr(e, "max_chunk_attempts"):
+        e.max_chunk_attempts = options.max_chunk_attempts
+    retry_model = getattr(e, "translate_model", None)
+    if retry_model is not None:
+        retry_model.max_chunk_attempts = options.max_chunk_attempts
     if accumulated_num_given:
         # 1 keeps the loader's own default and turns grouping off; the flag
         # having been typed is recorded either way, because plan mode's
