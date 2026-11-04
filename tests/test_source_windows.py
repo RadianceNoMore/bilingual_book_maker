@@ -13,6 +13,8 @@ from book_maker.source_windows import (
     SourceWindow,
     SourceWindowError,
     WindowUnit,
+    extraction_candidates,
+    extraction_request_matches_window,
     join_fragments,
     plan_source_windows,
     prepare_window,
@@ -96,12 +98,16 @@ def test_oversized_single_sentence_fails_before_provider_request():
         )
 
 
-def test_extraction_prompt_has_valid_contract_and_window_scoped_citations():
+def test_extraction_prompt_requests_names_without_provider_citations():
     unit = WindowUnit("p1", "p1", "御坂美琴 arrived.", 0, "chapter-1")
     window = SourceWindow("w000001", (unit,), 4)
     prompt = source_window_prompt(window, "", "Japanese")
-    example = '{"window_id":"...","names":[{"source":"exact spelling","unit_ids":["unit-id"]}]}'
+    example = '{"window_id":"...","names":["exact spelling"],"excluded_candidates":[]}'
     assert example in prompt
+    data = json.loads(prompt.rsplit("\n", 1)[-1])
+    assert data["source_units"] == [unit.source]
+    assert "units" not in data
+    assert data["window_source_sha256"] == window.source_digest
 
     extraction = (
         '{"window_id":"w000001","names":'
@@ -110,6 +116,100 @@ def test_extraction_prompt_has_valid_contract_and_window_scoped_citations():
     assert validate_extraction(extraction, window) == [
         {"source": "御坂美琴", "unit_ids": ["p1"]}
     ]
+
+
+def test_name_strings_are_grounded_locally_and_bracketed_longest_first():
+    unit = WindowUnit("p1", "p1", "御坂美琴看着美琴。", 0, "chapter-1")
+    window = SourceWindow("w000001", (unit,), 10)
+    raw = json.dumps({"window_id": window.identity, "names": ["美琴", "御坂美琴", "美琴"]})
+    extracted = validate_extraction(raw, window)
+    assert extracted == [
+        {"source": "御坂美琴", "unit_ids": ["p1"]},
+        {"source": "美琴", "unit_ids": ["p1"]},
+    ]
+    assert prepare_window(window, extracted)[0]["p1"] == "${御坂美琴}看着${美琴}。"
+    assert extraction_candidates(raw, window) == ["御坂美琴", "美琴"]
+
+
+@pytest.mark.parametrize("names", [["Misaka Mikoto"], ["${美琴}"], [" 美琴"], [123]])
+def test_name_string_validation_rejects_nonliteral_or_invalid_names(names):
+    window = SourceWindow("w000001", (WindowUnit("p1", "p1", "美琴笑了。", 0, "c1"),), 5)
+    with pytest.raises(SourceWindowError):
+        validate_extraction(json.dumps({"window_id": window.identity, "names": names}), window)
+
+
+@pytest.mark.parametrize("raw", [
+    '```json\n{"window_id":"w000001","names":["美琴"]}',
+    '```json\n{"window_id":"w000001","names":["美琴"]}\n```json\n{}\n```',
+    '{"window_id":"w000001","names":["美琴"]} {}',
+    '```json\n{"window_id":"w000001","names":["美琴',
+])
+def test_extraction_rejects_truncated_nested_or_multiple_json_objects(raw):
+    window = SourceWindow("w000001", (WindowUnit("p1", "p1", "美琴笑了。", 0, "c1"),), 5)
+    with pytest.raises(SourceWindowError):
+        validate_extraction(raw, window)
+
+
+def test_exclusion_field_is_optional_only_when_all_candidates_are_extracted():
+    window = SourceWindow("w000001", (WindowUnit("p1", "p1", "御坂美琴看着美琴。", 0, "c1"),), 10)
+    raw = json.dumps({"window_id": window.identity, "names": ["御坂美琴", "美琴"]})
+    assert len(validate_extraction(raw, window, ["御坂美琴", "美琴"])) == 2
+    incomplete = json.dumps({"window_id": window.identity, "names": ["御坂美琴"]})
+    with pytest.raises(SourceWindowError, match="without deciding"):
+        validate_extraction(incomplete, window, ["御坂美琴", "美琴"])
+    contradictory = json.dumps({"window_id": window.identity, "names": ["美琴"], "excluded_candidates": ["美琴"]})
+    with pytest.raises(SourceWindowError, match="both extracted and excluded"):
+        validate_extraction(contradictory, window, ["美琴"])
+
+
+def test_historical_candidate_requests_must_match_exact_source_and_order():
+    unit = WindowUnit("p1", "p1", "御坂美琴看着美琴。", 0, "c1")
+    window = SourceWindow("w000001", (unit,), 10)
+    assert extraction_request_matches_window(source_window_prompt(window, "", "zh"), window)
+    legacy = "Original source data:\n" + json.dumps({"window_id": window.identity,
+        "units": [{"unit_id": "p1", "source": unit.source}]}, ensure_ascii=False) + "\nRetry instructions."
+    assert extraction_request_matches_window(legacy, window)
+    other = SourceWindow(window.identity, (WindowUnit("p1", "p1", "美琴来了。", 0, "c1"),), 10)
+    assert not extraction_request_matches_window(source_window_prompt(other, "", "zh"), window)
+    assert not extraction_request_matches_window(legacy.replace(unit.source, "other source"), window)
+
+
+def test_resumed_extraction_uses_one_contract_and_hashes_actual_retry(tmp_path, monkeypatch):
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"source")
+    unit = WindowUnit("p1", "p1", "御坂美琴看着美琴。", 0, "c1")
+    window = SourceWindow("w000001", (unit,), 10)
+    model = FakeModel()
+    workflow = MarkerWorkflow(model, str(source_path), settings={"workflow": WINDOW_WORKFLOW})
+    workflow.register_source_window_plan([window], name_budget=8192, summary_budget=1500,
+        run_fingerprint="test", cross_chapters=False)
+    old_prompt = source_window_prompt(window, "", "zh")
+    workflow.state["diagnostics"]["failures"].append({
+        "stage": "window-name-extraction",
+        "request": {"messages": [{"role": "user", "content": old_prompt}]},
+        "response": json.dumps({"window_id": window.identity, "names": ["美琴"]}),
+    })
+    requests = []
+    def extract(prompt):
+        requests.append(prompt)
+        model._protected_last_request = {"messages": [{"role": "user", "content": prompt}]}
+        # First response forgets the candidate. Second decides it by inclusion,
+        # without the optional exclusions field, reproducing text_190's schema case.
+        names = ["御坂美琴"] if len(requests) == 1 else ["御坂美琴", "美琴"]
+        return json.dumps({"window_id": window.identity, "names": names})
+    model.extract_window_names = extract
+    monkeypatch.setattr(workflow, "_backoff", lambda *args, **kwargs: None)
+    record, prepared, _spans = workflow.prepare_source_window(window, source_language="zh")
+    assert len(requests) == 2
+    assert json.loads(requests[0].rsplit("\n", 1)[-1])["retry_candidates"] == ["美琴"]
+    assert "previous_validation_error" in json.loads(requests[1].rsplit("\n", 1)[-1])
+    assert record["extraction_request_sha256"] == sha256(requests[1].encode()).hexdigest()
+    assert record["extraction_prompt_version"] == 3
+    assert prepared["p1"] == "${御坂美琴}看着${美琴}。"
+    assert set(workflow.catalogue) == {"御坂美琴", "美琴"}
+    failure = workflow.state["diagnostics"]["failures"][-1]
+    assert failure["window_source_sha256"] == window.source_digest
+
 
 
 def test_extraction_accepts_one_complete_json_markdown_fence():

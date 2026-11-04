@@ -149,16 +149,10 @@ class FakeMarkerModel:
             for value in self.translations.values()
             for label in re.findall(r"\$\{([^{}]+)\}", value)
         }
-        rows = []
-        for unit in data["units"]:
-            for label in sorted(candidates, key=lambda value: (-len(value), value)):
-                if label in unit["source"]:
-                    row = next((entry for entry in rows if entry["source"] == label), None)
-                    if row is None:
-                        row = {"source": label, "unit_ids": []}
-                        rows.append(row)
-                    if unit["unit_id"] not in row["unit_ids"]:
-                        row["unit_ids"].append(unit["unit_id"])
+        rows = sorted(
+            (label for label in candidates if any(label in source for source in data["source_units"])),
+            key=lambda value: (-len(value), value),
+        )
         return json.dumps(
             {"window_id": data["window_id"], "names": rows}, ensure_ascii=False
         )

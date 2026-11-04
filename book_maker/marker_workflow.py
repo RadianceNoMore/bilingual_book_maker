@@ -2423,7 +2423,7 @@ class MarkerWorkflow:
 
     # --------------------------------------------------------- diagnostics
 
-    def _record_failure(self, stage, response, reason):
+    def _record_failure(self, stage, response, reason, *, window=None):
         record = {
             "time": _now(),
             "stage": stage,
@@ -2434,6 +2434,9 @@ class MarkerWorkflow:
                 self.model, "_protected_response_metadata", None
             ),
         }
+        if window is not None:
+            record["window_id"] = window.identity
+            record["window_source_sha256"] = window.source_digest
         failures = self.state.setdefault("diagnostics", {}).setdefault("failures", [])
         failures.append(record)
         del failures[:-_DIAGNOSTIC_LIMIT]
@@ -2940,7 +2943,9 @@ class MarkerWorkflow:
         from book_maker.source_windows import (
             SourceWindowError,
             EXTRACTION_OUTPUT_TOKENS,
+            EXTRACTION_PROMPT_VERSION,
             extraction_candidates,
+            extraction_request_matches_window,
             prepare_window,
             source_window_prompt,
             validate_extraction,
@@ -2976,7 +2981,6 @@ class MarkerWorkflow:
                 "that supports protected-name stages."
             )
         prior = self.source_summary
-        prompt = source_window_prompt(window, prior, source_language)
         candidates = set()
         for failure in self.state.get("diagnostics", {}).get("failures", []):
             if failure.get("stage") != "window-name-extraction":
@@ -2986,7 +2990,7 @@ class MarkerWorkflow:
                 (message.get("content", "") for message in messages
                  if message.get("role") == "user"), ""
             )
-            if f'"window_id":"{window.identity}"' in old_prompt:
+            if extraction_request_matches_window(old_prompt, window):
                 candidates.update(extraction_candidates(failure.get("response", ""), window))
         # Reuse exact-source candidates from earlier failed runs of this same
         # window so resume does not forget why the previous extraction failed.
@@ -2995,30 +2999,18 @@ class MarkerWorkflow:
         attempted = 0
         for attempt in range(1, limit + 1):
             attempted = attempt
+            raw = None
             try:
                 print(
                     f"Protected names: extracting exact labels from {window.identity} "
                     f"(attempt {attempt}/{limit}, {window.estimated_tokens} source "
                     f"tokens, prior summary { _tokens(prior) if prior else 0 } tokens)."
                 )
-                request_prompt = prompt
-                if attempt > 1:
-                    request_prompt += (
-                        "\n\nREPAIR THE PREVIOUS EXTRACTION. Validation rejected it because: "
-                        + str(last_error or "the response was invalid")
-                        + ". Return a complete corrected JSON response."
-                    )
-                if candidates:
-                    request_prompt += (
-                        " Recheck each exact-source candidate below. Include it in names "
-                        "with one literal witness unit_id if it is a name or named term; "
-                        "otherwise put it in excluded_candidates. Do not omit a candidate "
-                        "without deciding it. Return exactly window_id, names, and "
-                        "excluded_candidates. Candidates: "
-                        + json.dumps(sorted(candidates, key=lambda value: (-len(value), value)), ensure_ascii=False)
-                    )
+                request_prompt = source_window_prompt(
+                    window, prior, source_language, candidates=candidates, failure=last_error,
+                )
+                self.model._protected_last_response = None
                 raw = hook(request_prompt)
-                self._protected_last_response = raw
                 extracted = validate_extraction(raw, window, candidates)
                 prepared, spans = prepare_window(window, extracted)
                 record = self.commit_window_preparation(
@@ -3026,7 +3018,8 @@ class MarkerWorkflow:
                     extracted,
                     prepared,
                     spans,
-                    extraction_request_sha256=self._source_digest(prompt),
+                    extraction_request_sha256=self._source_digest(request_prompt),
+                    prompt_version=EXTRACTION_PROMPT_VERSION,
                 )
                 if persist is not None:
                     try:
@@ -3054,7 +3047,9 @@ class MarkerWorkflow:
                 return record, prepared, spans
             except Exception as error:
                 last_error = error
-                raw = getattr(self.model, "_protected_last_response", "") or ""
+                raw = raw if isinstance(raw, str) else (
+                    getattr(self.model, "_protected_last_response", "") or ""
+                )
                 candidates.update(extraction_candidates(raw, window))
                 metadata = getattr(self.model, "_protected_response_metadata", None) or {}
                 print(
@@ -3064,7 +3059,7 @@ class MarkerWorkflow:
                     f"{len(candidates)} exact-source retry candidate(s)): {error}. "
                     f"Response prefix: {raw[:240].encode('unicode_escape').decode('ascii')}[/yellow]"
                 )
-                self._record_failure("window-name-extraction", raw, str(error))
+                self._record_failure("window-name-extraction", raw, str(error), window=window)
                 terminal = (
                     error.__class__.__name__ == "ProviderRefusal"
                     or getattr(self.model, "_fatal_error_detected", False)

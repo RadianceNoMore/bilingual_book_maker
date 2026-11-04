@@ -76,11 +76,22 @@ input-limit preflight is available only if the route exposes its limit.
 
 ## v2 extraction and catalogue
 
-The extraction response is strict JSON with one `window_id` and a `names`
-array. Each row contains an exact `source` spelling and current-window
-`unit_ids`; unknown units, ungrounded spellings, extra keys, and malformed JSON
-stop before body translation. An explicit empty array means no names were
-found. A malformed response may retry within the bounded extraction budget.
+The extraction response is one JSON object with `window_id`, a `names` array
+of exact source strings, and an `excluded_candidates` array (normally empty).
+Source locations and witness unit IDs are derived locally, so the model does
+not reproduce long paragraph IDs. Legacy objects containing `source` and one
+literal witness `unit_ids` entry are still validated strictly. Nonliteral
+spellings, extra keys, and malformed or truncated JSON stop before body
+translation. An explicit empty names array means no names were found.
+
+Retries use the same schema and supply grounded candidates from earlier
+rejected responses. Each candidate must be returned as a name or explicitly
+excluded; an absent exclusions field is accepted when no candidate remains
+undecided. Rejected responses never directly populate the catalogue. Resume
+recovers candidates only from requests matching the exact ordered window
+source. The preparation record hashes the actual successful request, including
+its retry data. A malformed response may retry within the bounded extraction
+budget; syntactically damaged responses are not salvaged into approved names.
 
 Once prepared, each exact label is added to the embedded catalogue before the
 first translation chunk. Existing labels reuse their stable SHA-256 key.
