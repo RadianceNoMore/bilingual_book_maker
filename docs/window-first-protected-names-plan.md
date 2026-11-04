@@ -141,6 +141,16 @@ Previously registered exact labels reuse their catalogue keys. Do not send the
 entire novel's growing catalogue in every request or infer alias identity from
 similar spelling.
 
+Add every validated extracted name to the novel's persistent, cumulative name
+collection (the catalogue) when committing window preparation, before any chunk
+translation. Deduplicate by the exact source label and reuse its stable key
+across windows. Record its extraction window, cited source units, and matched
+spans; retain earlier entries even if a later window or summary omits them.
+New entries initially have zero accepted-translation occurrences and a pending
+display mapping. Increment accepted counts only when translations are committed.
+Checkpoint these collection changes atomically with the prepared window so
+resume restores the same collection without duplicate entries or counts.
+
 One validated extraction response prepares the whole window. There is no
 per-chunk extraction, voting, or secondary model review. Transport, truncation,
 or malformed-output failures may retry the same request within a separate
@@ -159,6 +169,11 @@ deterministic longest-first, non-overlapping matches. Build each result from the
 original offsets in one pass. Never repeatedly replace inside text that already
 contains brackets. Label matching stays within a source unit and cannot span a
 paragraph separator.
+
+Select matches in descending name length, with lexical ordering as the stable
+tie-breaker. Reserve each selected span before considering shorter names, so
+`御坂美琴` wins over the `美琴` substring inside it; a separate occurrence of
+`美琴` is still protected. Emit brackets in source order after span selection.
 
 ```text
 Extracted labels: 御坂美琴, 美琴
@@ -331,6 +346,9 @@ migration of old partially translated books is outside this plan.
 - Exact-name replacement handles overlapping full/short names, repeats, literal
   regex characters, multilingual labels, XML escaping, and reserved source
   syntax. Generated markers never become replacement input.
+- Extracted names enter the cumulative collection before translation. The same
+  label extracted in W2 reuses its W1 entry; labels omitted by a later summary
+  remain collected. Preparation and resume do not increment accepted counts.
 - A body response loses a marker, adds one, changes its label, duplicates one,
   or moves one into another unit: only failing units remain pending. Valid
   siblings stay byte-for-byte stable through retries and resume.
