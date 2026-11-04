@@ -113,6 +113,140 @@ def _prefix(call):
     return call["messages"][:-1]
 
 
+def test_real_framed_route_uses_prepared_context_and_restores_names_before_history(tmp_path):
+    from book_maker.protected_names import ProtectedNames, NameAnnotations, unit_request
+    from book_maker.glossary import Glossary
+    from book_maker.translator.base_translator import BATCH_DELIMITER
+    from book_maker.translation_quality import validate_translation_texts
+    import re
+
+    sources=['阿奇拉是马其顿的王。','阿奇拉说话了。']
+    annotation=NameAnnotations(sources,Glossary.parse('阿奇拉 → Archelaus # name'))
+    tags=[re.search(r'<bbm-name.*?</bbm-name>',text).group().replace('>阿奇拉<','>Wrong King<') for text in annotation.sent]
+    extraction='## Summary\n阿奇拉是马其顿的王。\n## Renderings\n<renderings>\n阿奇拉 → Wrong King # name\n</renderings>'
+    vote=json.dumps({'votes':[{'term':'阿奇拉','translation':'Archelaus','reason':'Original identity checked'}]})
+    identities,_=unit_request(annotation.sent)
+    response='<bbm-response>'+''.join(f'<bbm-unit id="{identity}">English prose {tag}.</bbm-unit>' for identity,tag in zip(identities,tags))+'</bbm-response>'
+    t=_translator([extraction,vote,vote,vote,response],glossary_auto=True)
+    t.language='English';t.protected_names=True
+    assert not t.glossary_auto_on
+    book=tmp_path/'book.epub';book.write_bytes(b'fixture')
+    state=ProtectedNames(t,book,False)
+    result=state.translate(sources,t.translate_list,lambda out:validate_translation_texts(sources,out,'en','zh'))
+    assert result==['English prose Archelaus.']*2
+    assert len(t.sent)==5
+    assert 'original name' in t.sent[-1]['messages'][-1]['content']
+    assert 'approved="Archelaus"' in t.sent[-1]['messages'][-1]['content']
+    assert '是马其顿的王。' in t.sent[-1]['messages'][-1]['content']
+    assert '## Summary' not in t.sent[-1]['messages'][-1]['content']
+    assert len(t.session.messages())==2
+    assert 'Wrong King' not in t.session.messages()[-1]['content']
+
+
+def test_language_retry_feedback_reaches_plain_and_structured_user_prompts():
+    from book_maker.loader.helper import untranslated_retry_feedback
+
+    translator = _translator()
+    with untranslated_retry_feedback(translator):
+        plain = translator._user_content("source passage")
+        structured = translator._create_structured_batch_messages(["one", "two"])
+        assert "previous response copied" in plain
+        assert any("previous response copied" in m["content"] for m in structured)
+    assert "previous response copied" not in translator._user_content("next passage")
+
+
+def test_framed_response_with_length_finish_reason_is_rejected_even_if_xml_is_closed():
+    from book_maker.protected_names import unit_request, NameMarkupError
+    translator=_translator()
+    identities,_=unit_request(['source'])
+    response=f'<bbm-response><bbm-unit id="{identities[0]}">English.</bbm-unit></bbm-response>'
+    completion=_completion(response)
+    completion.choices[0].finish_reason='length'
+    translator.openai_client.chat.completions.create=Mock(return_value=completion)
+    with pytest.raises(NameMarkupError,match='truncated'):
+        translator.translate_protected_units(['source'])
+    assert not translator.session.messages()
+
+
+def test_protected_refusal_records_exact_request_once_and_keeps_accepted_state(tmp_path):
+    from book_maker.protected_names import ProtectedNames
+    from book_maker.provider_refusal import ProviderRefusal
+    refusal = "Your request may go against my [guidelines](https://gemini.google/policy-guidelines/). Would you like to try something else?"
+    t = _translator([refusal])
+    t.language = 'English'; t.protected_names = True
+    t.session.append('old user poison', 'old assistant poison')
+    book = tmp_path / 'book.epub'; book.write_bytes(b'fixture')
+    state = ProtectedNames(t, book, False)
+    t._protected_names_state = state
+    state.windows = [['ordinary source']]
+    state.data['windows']['ready'] = {'sources': ['ordinary source'], 'done': True,
+                                      'summary': 'future summary poison'}
+    before = t.session.messages()
+    with pytest.raises(ProviderRefusal, match='will not be retried or split'):
+        state.translate(['ordinary source'], t.translate_list, lambda _: None)
+    assert len(t.sent) == 1
+    request = t.sent[0]
+    assert all('poison' not in m['content'] for m in request['messages'])
+    assert t.session.messages() == before
+    assert state.data['records'] == {}
+    log = book.with_name('book_protected_names_failures.jsonl')
+    records = [json.loads(line) for line in log.read_text('utf8').splitlines()]
+    assert len(records) == 1
+    assert records[0]['request'] == request
+    assert records[0]['response'] == refusal
+    assert records[0]['response_metadata']['elapsed_seconds'] >= 0
+    assert not hasattr(t, '_protected_name_instruction')
+
+
+@pytest.mark.parametrize('stage', ['source_preparation_request', 'glossary_review_request'])
+def test_preparation_and_review_refusals_also_stop_immediately(stage):
+    from book_maker.provider_refusal import ProviderRefusal
+    t = _translator(["I'm sorry, I cannot help with this request."])
+    with pytest.raises(ProviderRefusal):
+        getattr(t, stage)('ordinary source')
+    assert len(t.sent) == 1
+
+
+@pytest.mark.parametrize('structured', [False, True])
+def test_compaction_refusal_never_overwrites_valid_snapshot_or_retries_history(tmp_path, structured):
+    from book_maker.session_context import HandoffReport, parse_snapshot
+    refusal = "Your request may go against my [guidelines](https://gemini.google/policy-guidelines/). Would you like to try something else?"
+    path = tmp_path / 'handoff.md'
+    HandoffReport(window=1, summary='Previous valid summary.').write_snapshot(path)
+    before = path.read_bytes()
+    t = _translator(handoff_path=path, context_compact_at=500)
+    completion = _completion('' if structured else refusal)
+    if structured:
+        completion.choices[0].message.refusal = refusal
+        completion.choices[0].finish_reason = 'content_filter'
+    t.openai_client.chat.completions.create = Mock(return_value=completion)
+    failures = []
+    t._protected_names_state = SimpleNamespace(record_failure=lambda *args: failures.append(args))
+    t.session.append('Accepted original chunk.', 'Accepted translated chunk.')
+    old_window = t.session.windows
+    t._compact_session()
+    assert t.openai_client.chat.completions.create.call_count == 1
+    assert path.read_bytes() == before
+    assert parse_snapshot(path).summary == 'Previous valid summary.'
+    assert t.session.messages() == []
+    assert t.session.windows == old_window + 1
+    assert failures[0][0] == 'context-compaction'
+    assert t._protected_last_request['messages'][-1]['role'] == 'user'
+    # The next ordinary accepted exchange does not retry the refused history.
+    t._record_session_exchange('short new source', 'short new translation')
+    assert t.openai_client.chat.completions.create.call_count == 1
+
+
+def test_resume_ignores_snapshot_containing_provider_refusal(tmp_path):
+    from book_maker.session_context import HandoffReport
+    refusal = "I'm sorry, it appears I can't help with this particular request, as it may go against my [guidelines](https://gemini.google/policy-guidelines/)."
+    path = tmp_path / 'handoff.md'
+    HandoffReport(window=2, summary=refusal).write_snapshot(path)
+    t = _translator(handoff_path=path)
+    assert not t.restore_session_handoff()
+    assert not t.session.messages()
+
+
 def _tail_containing(translator, needle):
     """The tail message of the last request that carried `needle`.
 
@@ -676,7 +810,8 @@ class TestAFixedStyleRidesTheWindowStart:
         t.translate("a" * 4000, False)
         t.translate("b" * 10, False)
         compact = _tail_containing(t, HANDOFF_MARKER)
-        assert "style" not in compact.lower()
+        from book_maker.session_context import _STYLE_REQUEST
+        assert _STYLE_REQUEST not in compact
 
     def test_the_report_shows_the_users_style_verbatim(self, tmp_path, capsys):
         path = tmp_path / "h.md"

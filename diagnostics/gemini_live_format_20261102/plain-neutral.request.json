@@ -1,0 +1,10 @@
+{
+  "model": "gemini-anon",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Translate these two Chinese paragraphs into English. Return only the translation, preserving paragraph breaks.\n\n在靠近落地窗的书架前，我能清晰地看到一色。\n\n找到那本漫画期刊，发现那部连载漫画竟然加更了，我喜不自禁多看了一眼，就被吸引住了。"
+    }
+  ],
+  "temperature": 1
+}

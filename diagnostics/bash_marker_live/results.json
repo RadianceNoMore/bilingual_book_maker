@@ -1,0 +1,113 @@
+[
+  {
+    "sample": 1,
+    "source_chunk_index": 259,
+    "source_documents": [
+      "EPUB/chap_112.xhtml",
+      "EPUB/chap_113.xhtml"
+    ],
+    "units": 40,
+    "estimated_source_tokens": 574,
+    "http_status": 200,
+    "outcome": "aligned_translation",
+    "source_markers": 38,
+    "returned_markers": 38,
+    "source_unique_names": 6,
+    "returned_unique_names": 6,
+    "unknown_markers": {},
+    "malformed_markers": [],
+    "fully_missing_names": {},
+    "invented_name_markup_slots": [],
+    "unprotected_source_names": [],
+    "source_counts": {
+      "黑子": 4,
+      "一色": 12,
+      "美琴": 15,
+      "佐天泪子": 4,
+      "白井黑子": 2,
+      "学园都市": 1
+    },
+    "returned_counts": {
+      "黑子": 4,
+      "一色": 12,
+      "美琴": 15,
+      "佐天泪子": 4,
+      "白井黑子": 2,
+      "学园都市": 1
+    },
+    "seconds": 71.91
+  },
+  {
+    "sample": 2,
+    "source_chunk_index": 150,
+    "source_documents": [
+      "EPUB/chap_58.xhtml"
+    ],
+    "units": 40,
+    "estimated_source_tokens": 521,
+    "http_status": 200,
+    "outcome": "aligned_translation",
+    "source_markers": 20,
+    "returned_markers": 20,
+    "source_unique_names": 4,
+    "returned_unique_names": 4,
+    "unknown_markers": {},
+    "malformed_markers": [],
+    "fully_missing_names": {},
+    "invented_name_markup_slots": [],
+    "unprotected_source_names": [],
+    "source_counts": {
+      "一色": 15,
+      "美琴": 3,
+      "御坂一色": 1,
+      "常盘台": 1
+    },
+    "returned_counts": {
+      "一色": 15,
+      "美琴": 3,
+      "御坂一色": 1,
+      "常盘台": 1
+    },
+    "seconds": 94.99
+  },
+  {
+    "sample": 3,
+    "source_chunk_index": 61,
+    "source_documents": [
+      "EPUB/chap_23.xhtml",
+      "EPUB/chap_24.xhtml"
+    ],
+    "units": 40,
+    "estimated_source_tokens": 716,
+    "http_status": 200,
+    "outcome": "aligned_translation",
+    "source_markers": 49,
+    "returned_markers": 49,
+    "source_unique_names": 7,
+    "returned_unique_names": 7,
+    "unknown_markers": {},
+    "malformed_markers": [],
+    "fully_missing_names": {},
+    "invented_name_markup_slots": [],
+    "unprotected_source_names": [],
+    "source_counts": {
+      "黑子": 14,
+      "一色": 19,
+      "美琴": 11,
+      "操祈": 1,
+      "常盘台中学": 2,
+      "御坂美琴": 1,
+      "食蜂操祈": 1
+    },
+    "returned_counts": {
+      "黑子": 14,
+      "一色": 19,
+      "美琴": 11,
+      "操祈": 1,
+      "常盘台中学": 2,
+      "御坂美琴": 1,
+      "食蜂操祈": 1
+    },
+    "seconds": 55.68
+  }
+]

@@ -1,0 +1,101 @@
+[
+  {
+    "case": "xml_only",
+    "round": 1,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "In front of the bookshelf near the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Finding that manga magazine, I discovered that the serialized manga actually had an extra chapter, and after taking a delighted glance at it, I was completely hooked."
+    ],
+    "seconds": 27.02
+  },
+  {
+    "case": "preceding_context",
+    "round": 1,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "In front of the bookshelf near the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Finding that manga magazine, I discovered that the serialized manga had surprisingly received an extra chapter. I couldn't help taking another look out of joy, and I was immediately hooked."
+    ],
+    "seconds": 25.88
+  },
+  {
+    "case": "checked_handoff_seed",
+    "round": 1,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "Standing by the bookshelf near the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Upon finding that manga magazine and discovering that the serialized manga had a surprise extra chapter, I couldn't help taking an extra look out of sheer joy, and I was completely drawn in."
+    ],
+    "seconds": 6.57
+  },
+  {
+    "case": "xml_only",
+    "round": 2,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "In front of the bookshelf near the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Finding that manga magazine and discovering that the serialized manga had unexpectedly received an extra chapter, I couldn't help stealing a glance and was immediately hooked."
+    ],
+    "seconds": 7.93
+  },
+  {
+    "case": "preceding_context",
+    "round": 2,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "In front of the bookshelf near the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Finding that manga magazine and discovering that the serialized manga had surprisingly received an extra chapter, I couldn't help taking another look in delight, and was instantly hooked."
+    ],
+    "seconds": 38.53
+  },
+  {
+    "case": "checked_handoff_seed",
+    "round": 2,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "Standing near the bookshelf by the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Upon finding that comic magazine and discovering that the serialized manga had an extra chapter, I couldn't help taking a joyful extra look and got completely hooked."
+    ],
+    "seconds": 16.51
+  },
+  {
+    "case": "xml_only",
+    "round": 3,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "Standing in front of the bookshelf near the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Finding that manga magazine and discovering that serialized manga had surprisingly released an extra chapter, I couldn't help taking another glance at it, and I was completely hooked."
+    ],
+    "seconds": 17.09
+  },
+  {
+    "case": "preceding_context",
+    "round": 3,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "In front of the bookshelf near the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Finding that comic magazine and discovering that the serialized manga had surprisingly received an extra chapter, I couldn't help glancing at it a bit longer, and I was instantly hooked."
+    ],
+    "seconds": 14.65
+  },
+  {
+    "case": "checked_handoff_seed",
+    "round": 3,
+    "status": 200,
+    "outcome": "valid_translation",
+    "translations": [
+      "Standing in front of the bookshelf near the floor-to-ceiling window, I could clearly see Isshiki.",
+      "Finding that manga magazine and discovering that the serialized manga had an unexpected extra chapter, I couldn't help glancing at it a bit longer and was instantly hooked."
+    ],
+    "seconds": 6.1
+  }
+]

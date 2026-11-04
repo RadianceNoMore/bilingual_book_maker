@@ -1,0 +1,817 @@
+[
+  {
+    "unit": 1,
+    "source": "“请对我使用空间移动试试看，不过计算结束后真正移动前请提醒我一下。”",
+    "premarked_translation": "\"Please try using spatial teleportation on me, but let me know right after the calculation finishes and before the actual move.\"",
+    "self_marked_translation": "\"Try using spatial movement on me, but please give me a heads-up after the calculations are done and right before you actually move me.\"",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 2,
+    "source": "“没问题的说。”",
+    "premarked_translation": "\"No problem, dess.\"",
+    "self_marked_translation": "\"No problem, dess.\"",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 3,
+    "source": "黑子走过来，把手搭在一色肩膀上。",
+    "premarked_translation": "${黑子} walked over and placed a hand on ${一色}'s shoulder.",
+    "self_marked_translation": "${白井黑子} walked over and placed her hand on ${一色}'s shoulder.",
+    "premarked_source_names": {
+      "黑子": 1,
+      "一色": 1
+    },
+    "self_selected_names": {
+      "白井黑子": 1,
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 4,
+    "source": "“一色大人，准备好了嘛？”",
+    "premarked_translation": "\"Lady ${一色}, are you ready?\"",
+    "self_marked_translation": "\"Lord ${一色}, are you ready?\"",
+    "premarked_source_names": {
+      "一色": 1
+    },
+    "self_selected_names": {
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 5,
+    "source": "“OK，请发动吧。”一色使用了净化。",
+    "premarked_translation": "\"OK, please activate it.\" ${一色} used Purification.",
+    "self_marked_translation": "\"OK, please activate it.\" ${一色} used ${净化}.",
+    "premarked_source_names": {
+      "一色": 1
+    },
+    "self_selected_names": {
+      "一色": 1,
+      "净化": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {
+      "净化": 1
+    },
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 6,
+    "source": "“欸？”黑子出现在远处，一色留在原地。",
+    "premarked_translation": "\"Eh?\" ${黑子} appeared in the distance, while ${一色} stayed right where she was.",
+    "self_marked_translation": "\"Eh?\" ${白井黑子} appeared in the distance, while ${一色} stayed in place.",
+    "premarked_source_names": {
+      "黑子": 1,
+      "一色": 1
+    },
+    "self_selected_names": {
+      "白井黑子": 1,
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 7,
+    "source": "罕见的传送失败了呢。",
+    "premarked_translation": "A rare teleportation failure.",
+    "self_marked_translation": "That's a rare teleportation failure.",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 8,
+    "source": "“在我能力的判定下，黑子的对我的坐标计算什么的大概被判定为标记了，所以我大概是可以一定程度的无效化他人特定超能力的，反正下标记和精神操控这样的肯定对我不奏效啦。”",
+    "premarked_translation": "\"Based on how my ability judges things, ${黑子}'s coordinate calculations on me were probably judged as a mark, so I can probably nullify others' specific espers' abilities to a certain degree. Anyway, things like placing marks and mind control definitely won't work on me.\"",
+    "self_marked_translation": "\"Based on my ability's judgment, ${白井黑子}'s coordinate calculations for me were probably flagged as a tag, so I suppose I can nullify other people's specific espers to a certain extent. Anyway, things like placing tags and mind control definitely won't work on me.\"",
+    "premarked_source_names": {
+      "黑子": 1
+    },
+    "self_selected_names": {
+      "白井黑子": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 9,
+    "source": "黑子再次一个闪烁传送回原地，小手空抓着，还是有些难以置信。",
+    "premarked_translation": "${黑子} blinked back to her original spot in a flash, grabbing at empty air, still finding it hard to believe.",
+    "self_marked_translation": "${白井黑子} flashed back to her original spot in another blink, her small hand grasping empty air as she remained somewhat incredulous.",
+    "premarked_source_names": {
+      "黑子": 1
+    },
+    "self_selected_names": {
+      "白井黑子": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 10,
+    "source": "“原来如此。”美琴若有所思，“但是如果食蜂篡改你的常识，让你把她对你施加的效果定义为正常状态那岂不是有些不妙？”",
+    "premarked_translation": "\"I see,\" ${美琴} said thoughtfully. \"But wouldn't it be a bit troublesome if Shokuhou tampered with your common sense and made you define the effects she applies to you as normal?\"",
+    "self_marked_translation": "\"I see,\" ${御坂美琴} murmured thoughtfully. \"But wouldn't it be a bit troublesome if ${食蜂操祈} tampered with your common sense and made you define the effects she applied to you as normal?\"",
+    "premarked_source_names": {
+      "美琴": 1
+    },
+    "self_selected_names": {
+      "御坂美琴": 1,
+      "食蜂操祈": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1
+    },
+    "new_names_vs_premarking": {
+      "御坂美琴": 1,
+      "食蜂操祈": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴",
+      "食蜂操祈"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 11,
+    "source": "“那不会，操祈同学只对我施展了精神操控和读取记忆、读心的能力，精神操控会被我判定为催眠，我有一个类似非条件反射的道具，可以免疫控制。”",
+    "premarked_translation": "\"That won't happen. Student ${操祈} only used mind control, memory reading, and mind-reading abilities on me. Mind control gets judged by me as hypnosis, and I have an item similar to an unconditioned reflex that grants immunity to control.\"",
+    "self_marked_translation": "\"That won't happen. Senior ${食蜂操祈} only used mind control, memory-reading, and mind-reading abilities on me. Mind control gets classified by me as hypnosis, and I have a prop similar to an unconditioned reflex that can grant immunity to control.\"",
+    "premarked_source_names": {
+      "操祈": 1
+    },
+    "self_selected_names": {
+      "食蜂操祈": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "操祈": 1
+    },
+    "new_names_vs_premarking": {
+      "食蜂操祈": 1
+    },
+    "ungrounded_markers": [
+      "食蜂操祈"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 12,
+    "source": "说着一色在手心中显化出水银，像是一只倒扣的墨绿色杯子。",
+    "premarked_translation": "Saying this, ${一色} materialized mercury in the palm of her hand, looking like an upside-down dark green cup.",
+    "self_marked_translation": "As she spoke, ${一色} materialized quicksilver in the palm of her hand, resembling an upside-down dark-green cup.",
+    "premarked_source_names": {
+      "一色": 1
+    },
+    "self_selected_names": {
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 13,
+    "source": "“哇，是没见过的东西欸。”美琴啧啧称奇。",
+    "premarked_translation": "\"Whoa, that's something I've never seen before,\" ${美琴} exclaimed in wonder.",
+    "self_marked_translation": "\"Whoa, that's something I've never seen before,\" ${御坂美琴} exclaimed in wonder.",
+    "premarked_source_names": {
+      "美琴": 1
+    },
+    "self_selected_names": {
+      "御坂美琴": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1
+    },
+    "new_names_vs_premarking": {
+      "御坂美琴": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 14,
+    "source": "“黑子记得一色大人的装备要穿戴上才有效果的说。”",
+    "premarked_translation": "\"${黑子} remembers that Lady ${一色}'s equipment needs to be worn to have an effect.\"",
+    "self_marked_translation": "\"${白井黑子} remembers that Lord ${一色}'s equipment needs to be worn for the effect to work, dess.\"",
+    "premarked_source_names": {
+      "黑子": 1,
+      "一色": 1
+    },
+    "self_selected_names": {
+      "白井黑子": 1,
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 15,
+    "source": "“现在大大升级了哦，不仅效果进化，使用方式也更加便捷了呢。”一色手中浮现出一双黄色带小翅膀的靴子，一把将其炼化成金光，没入美琴身体里。",
+    "premarked_translation": "\"It's been massively upgraded now! Not only have the effects evolved, but the way they're used is also much more convenient.\" A pair of yellow boots with small wings appeared in ${一色}'s hand, and she instantly refined them into a golden light that sank into ${美琴}'s body.",
+    "self_marked_translation": "\"It's had a massive upgrade now! Not only has the effect evolved, but the way it's used is much more convenient too.\" A pair of yellow boots with small wings surfaced in ${一色}'s hands, and she instantly refined them into a golden light that sank into ${御坂美琴}'s body.",
+    "premarked_source_names": {
+      "一色": 1,
+      "美琴": 1
+    },
+    "self_selected_names": {
+      "一色": 1,
+      "御坂美琴": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1
+    },
+    "new_names_vs_premarking": {
+      "御坂美琴": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 16,
+    "source": "“呜哇，怎么啦，一色你不要把什么奇怪的东西弄进我身体啊？”美琴上下检查着自己的身体。",
+    "premarked_translation": "\"Whoa, what's going on? ${一色}, don't go putting strange things into my body!\" ${美琴} checked herself up and down.",
+    "self_marked_translation": "\"Whoa, what's going on? ${一色}, don't go putting strange things into my body!\" ${御坂美琴} checked herself up and down.",
+    "premarked_source_names": {
+      "一色": 1,
+      "美琴": 1
+    },
+    "self_selected_names": {
+      "一色": 1,
+      "御坂美琴": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1
+    },
+    "new_names_vs_premarking": {
+      "御坂美琴": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 17,
+    "source": "“安啦安啦，姐姐快跑跑试试看。”一色推着美琴的背。",
+    "premarked_translation": "\"Relax, relax. Big Sis, try running around and see.\" ${一色} pushed ${美琴}'s back.",
+    "self_marked_translation": "\"Relax, relax. Big sis, hurry up and try running a bit.\" ${一色} pushed ${御坂美琴}'s back.",
+    "premarked_source_names": {
+      "一色": 1,
+      "美琴": 1
+    },
+    "self_selected_names": {
+      "一色": 1,
+      "御坂美琴": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1
+    },
+    "new_names_vs_premarking": {
+      "御坂美琴": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 18,
+    "source": "“欸——好吧，我试试。”美琴小跑起来，发现自己轻易就达到了以前全速奔跑的速度，脚下再发力速度也是更上一层楼。",
+    "premarked_translation": "\"Eh—alright, I'll give it a try.\" ${美琴} broke into a jog and found that she effortlessly reached her previous top-speed running pace, and exerting more force underfoot took her speed to an even higher level.",
+    "self_marked_translation": "\"Eh—fine, I'll give it a try.\" ${御坂美琴} broke into a light jog, finding that she effortlessly reached her previous top running speed, and exerting strength through her feet pushed her speed to an even higher level.",
+    "premarked_source_names": {
+      "美琴": 1
+    },
+    "self_selected_names": {
+      "御坂美琴": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1
+    },
+    "new_names_vs_premarking": {
+      "御坂美琴": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 19,
+    "source": "“真的有效果！”美琴停下脚步，回头望着一色和黑子，向他们招手，三四秒之内已经跑出来大概五十米了。",
+    "premarked_translation": "\"It really works!\" ${美琴} stopped, looked back at ${一色} and ${黑子}, and waved at them. Within three to four seconds, she had already run about fifty meters.",
+    "self_marked_translation": "\"It really works!\" ${御坂美琴} stopped in her tracks, looked back at ${一色} and ${白井黑子}, and waved at them. Within three to four seconds, she had already run about fifty meters.",
+    "premarked_source_names": {
+      "美琴": 1,
+      "一色": 1,
+      "黑子": 1
+    },
+    "self_selected_names": {
+      "御坂美琴": 1,
+      "一色": 1,
+      "白井黑子": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1,
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "御坂美琴": 1,
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴",
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 20,
+    "source": "一色变出一双蓝边红色长筒靴子，将其化作光团，投入黑子怀里。",
+    "premarked_translation": "${一色} conjured a pair of red boots with blue rims, turned them into a ball of light, and tossed it into ${黑子}'s arms.",
+    "self_marked_translation": "${一色} conjured a pair of red long boots with blue edges, turned them into a ball of light, and tossed it into ${白井黑子}'s arms.",
+    "premarked_source_names": {
+      "一色": 1,
+      "黑子": 1
+    },
+    "self_selected_names": {
+      "一色": 1,
+      "白井黑子": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 21,
+    "source": "黑子眨了眨眼睛。",
+    "premarked_translation": "${黑子} blinked.",
+    "self_marked_translation": "${白井黑子} blinked.",
+    "premarked_source_names": {
+      "黑子": 1
+    },
+    "self_selected_names": {
+      "白井黑子": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 22,
+    "source": "“试试发动能力吧。”一色wink。",
+    "premarked_translation": "\"Try activating your ability.\" ${一色} winked.",
+    "self_marked_translation": "\"Try activating your ability.\" ${一色} winked.",
+    "premarked_source_names": {
+      "一色": 1
+    },
+    "self_selected_names": {
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 23,
+    "source": "“这个有什么效果呢？”",
+    "premarked_translation": "\"What kind of effect does this have?\"",
+    "self_marked_translation": "\"What kind of effect does this have?\"",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 24,
+    "source": "“会提高一些移动速度，减少施法冷却时间，简而言之就是跑得更快，黑子使用空间移动频率可以更高。不过运作机理的话，大概是提高黑子的计算能力？”",
+    "premarked_translation": "\"It slightly increases movement speed and reduces casting cooldown. In short, you run faster, and ${黑子} can use spatial teleportation at a higher frequency. As for the operating mechanism, it probably boosts ${黑子}'s calculation capacity?\"",
+    "self_marked_translation": "\"It increases movement speed a bit and reduces spellcasting cooldowns. In short, you run faster, and ${白井黑子} can use spatial movement more frequently. As for the operational mechanism, though, it probably boosts ${白井黑子}'s calculation capacity?\"",
+    "premarked_source_names": {
+      "黑子": 2
+    },
+    "self_selected_names": {
+      "白井黑子": 2
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 2
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 2
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 25,
+    "source": "“这样啊，那黑子试一试。”",
+    "premarked_translation": "\"I see. Then ${黑子} will give it a try.\"",
+    "self_marked_translation": "\"I see. In that case, ${白井黑子} will give it a try.\"",
+    "premarked_source_names": {
+      "黑子": 1
+    },
+    "self_selected_names": {
+      "白井黑子": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 26,
+    "source": "黑子在美琴和一色两个端点之间闪烁了五次，最后停留在美琴身边，喃喃自语道：“确实有变快呢，综合提升了能力发动和计算效率，而且对黑子脑力的消耗没有什么变化。”",
+    "premarked_translation": "${黑子} blinked five times between the two endpoints of ${美琴} and ${一色}, finally stopping beside ${美琴}, and muttered to herself, \"It really did get faster. It comprehensively enhances ability activation and calculation efficiency, and there's no noticeable change in the consumption of ${黑子}'s mental energy.\"",
+    "self_marked_translation": "${白井黑子} blinked five times between the two endpoints of ${御坂美琴} and ${一色}, finally stopping beside ${御坂美琴} and muttering to herself, \"It really did get faster. It comprehensively enhanced ability activation and calculation efficiency, and the drain on ${白井黑子}'s mental power hasn't really changed.\"",
+    "premarked_source_names": {
+      "黑子": 2,
+      "美琴": 2,
+      "一色": 1
+    },
+    "self_selected_names": {
+      "白井黑子": 2,
+      "御坂美琴": 2,
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 2,
+      "美琴": 2
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 2,
+      "御坂美琴": 2
+    },
+    "ungrounded_markers": [
+      "白井黑子",
+      "御坂美琴"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 27,
+    "source": "“原石能力真的很不可思议呢。”美琴感叹道。",
+    "premarked_translation": "\"的原石 abilities are really incredible,\" ${美琴} remarked with a sigh.",
+    "self_marked_translation": "\"${原石} abilities are truly incredible,\" ${御坂美琴} sighed with emotion.",
+    "premarked_source_names": {
+      "美琴": 1
+    },
+    "self_selected_names": {
+      "原石": 1,
+      "御坂美琴": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1
+    },
+    "new_names_vs_premarking": {
+      "原石": 1,
+      "御坂美琴": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 28,
+    "source": "一色追过来：“这只是冰山一角啦。”",
+    "premarked_translation": "${一色} chased after them. \"This is just the tip of the iceberg.\"",
+    "self_marked_translation": "${一色} chased after them: \"This is just the tip of the iceberg.\"",
+    "premarked_source_names": {
+      "一色": 1
+    },
+    "self_selected_names": {
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 29,
+    "source": "美琴抬手抚摸着一色的脑袋瓜：“很了不起呢。”",
+    "premarked_translation": "${美琴} raised her hand and stroked ${一色}'s head. \"You're amazing.\"",
+    "self_marked_translation": "${御坂美琴} raised a hand to stroke ${一色}'s head: \"That's quite impressive.\"",
+    "premarked_source_names": {
+      "美琴": 1,
+      "一色": 1
+    },
+    "self_selected_names": {
+      "御坂美琴": 1,
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {
+      "美琴": 1
+    },
+    "new_names_vs_premarking": {
+      "御坂美琴": 1
+    },
+    "ungrounded_markers": [
+      "御坂美琴"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 30,
+    "source": "黑子对一色的能力展现出强烈兴趣，追问着：“一色大人，请问你能力的持续时间和有效范围如何呢？一人是否可以同时触发复数效果呢？。”",
+    "premarked_translation": "${黑子} showed a strong interest in ${一色}'s ability, pressing on: \"Lady ${一色}, may I ask what the duration and effective range of your ability are? Can a single person trigger multiple effects simultaneously?\"",
+    "self_marked_translation": "${白井黑子} showed intense interest in ${一色}'s ability, pressing on with questions: \"Lord ${一色}, may I ask what the duration and effective range of your ability are? Can a single person trigger multiple effects simultaneously?\"",
+    "premarked_source_names": {
+      "黑子": 1,
+      "一色": 2
+    },
+    "self_selected_names": {
+      "白井黑子": 1,
+      "一色": 2
+    },
+    "premarked_names_missing_or_fewer": {
+      "黑子": 1
+    },
+    "new_names_vs_premarking": {
+      "白井黑子": 1
+    },
+    "ungrounded_markers": [
+      "白井黑子"
+    ],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 31,
+    "source": "“时间和范围我没有测试，我自己倒是可以佩戴多个装备，不过除我之外的人目前只能给一个吧？”",
+    "premarked_translation": "\"I haven't tested the time and range. I can wear multiple pieces of equipment myself, but for people other than me, can we only give them one for now?\"",
+    "self_marked_translation": "\"I haven't tested the duration and range. I can wear multiple pieces of equipment myself, but for anyone other than me, can we only give them one for now?\"",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 32,
+    "source": "“即便是那样，这样高的泛用性与效果，也至少能达到了Lv.4大能力者的水平了。”",
+    "premarked_translation": "\"Even so, such high versatility and effectiveness easily reach the level of a Level 4 High Esper.\"",
+    "self_marked_translation": "\"Even so, such high versatility and efficacy easily reach the level of a Level 4 Major Esper.\"",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 33,
+    "source": "“恭喜你哦一色，双喜临门呢，过两天有身体检测，到时候验证一下自己能到什么程度吧！”",
+    "premarked_translation": "\"Congratulations, ${一色}! Double happiness indeed. There's a physical examination in a couple of days, so we can verify just how far you can go then!\"",
+    "self_marked_translation": "\"Congratulations, ${一色}! Double the joy. There's a physical examination in a couple of days, so we can verify just how far you've reached then!\"",
+    "premarked_source_names": {
+      "一色": 1
+    },
+    "self_selected_names": {
+      "一色": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 34,
+    "source": "“啊哈哈，这其实只是我一部分能力……嘿嘿，总之搞不好我会比姐姐还强哦？到时候真就是我罩着你了哦，姐姐。”",
+    "premarked_translation": "\"Ahaha, this is actually just a part of my ability... Hehe, who knows, I might even end up stronger than Big Sis? By then, I'll really be the one covering you, Big Sis.\"",
+    "self_marked_translation": "\"Ahaha, this is actually just part of my ability... Hehe, anyway, who knows, I might even end up stronger than big sis? By then, I'll really be the one covering you, big sis.\"",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 35,
+    "source": "“欸——真敢说呢，明明是区区一个妹妹。”",
+    "premarked_translation": "\"Eh—you sure talk big, considering you're just a little sister.\"",
+    "self_marked_translation": "\"Eh—you sure talk big, considering you're mere kid sister.\"",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 36,
+    "source": "“嘿嘿。”",
+    "premarked_translation": "\"Hehe.\"",
+    "self_marked_translation": "\"Hehe.\"",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 37,
+    "source": "第二十二章：这个是巨儒嘛？",
+    "premarked_translation": "Chapter 22: Is This a Giant Confucian?",
+    "self_marked_translation": "Chapter 22: Is this a giant scholar?",
+    "premarked_source_names": {},
+    "self_selected_names": {},
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 38,
+    "source": "穿过学园之舍的若干街区。",
+    "premarked_translation": "Passing through several blocks of Garden of Learners.",
+    "self_marked_translation": "Passing through several blocks of ${学园之舍}.",
+    "premarked_source_names": {},
+    "self_selected_names": {
+      "学园之舍": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {
+      "学园之舍": 1
+    },
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 39,
+    "source": "一色终于踏上了常盘台中学的土地，期待已久的女子初中生活，开始噜。",
+    "premarked_translation": "${一色} finally set foot on the soil of ${常盘台中学}. The long-awaited girls' middle school life begins now!",
+    "self_marked_translation": "${一色} finally set foot on the soil of ${常盘台中学}, and her long-awaited junior high school girl life begins now.",
+    "premarked_source_names": {
+      "一色": 1,
+      "常盘台中学": 1
+    },
+    "self_selected_names": {
+      "一色": 1,
+      "常盘台中学": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {},
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  },
+  {
+    "unit": 40,
+    "source": "常盘台中学，超能力者的摇篮，以培养高等级能力者文明，学生需要至少达到Level3才能入学。学生中最具代表性的人物莫过于御坂美琴和食蜂操祈了。",
+    "premarked_translation": "${常盘台中学}, the cradle of espers, is famous for cultivating high-level espers. Students are required to reach at least Level 3 to enroll. The most representative figures among the students are undoubtedly ${御坂美琴} and ${食蜂操祈}.",
+    "self_marked_translation": "${常盘台中学}, a cradle for espers renowned for cultivating high-level espers, requires students to reach at least ${Level3} in order to enroll. The most representative figures among the students are none other than ${御坂美琴} and ${食蜂操祈}.",
+    "premarked_source_names": {
+      "常盘台中学": 1,
+      "御坂美琴": 1,
+      "食蜂操祈": 1
+    },
+    "self_selected_names": {
+      "常盘台中学": 1,
+      "Level3": 1,
+      "御坂美琴": 1,
+      "食蜂操祈": 1
+    },
+    "premarked_names_missing_or_fewer": {},
+    "new_names_vs_premarking": {
+      "Level3": 1
+    },
+    "ungrounded_markers": [],
+    "chinese_outside_markers": [],
+    "stray_dollars": false
+  }
+]

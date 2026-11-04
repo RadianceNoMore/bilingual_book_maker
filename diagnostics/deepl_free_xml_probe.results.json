@@ -1,0 +1,10 @@
+[
+  {
+    "case": "plain_control",
+    "source": "御坂美琴抬起手。",
+    "options": {},
+    "status": 429,
+    "body": "{ \"code\": 429, \"message\": \"Too many requests. Please slow down and try again later.\" }\n",
+    "elapsed_seconds": 0.79
+  }
+]

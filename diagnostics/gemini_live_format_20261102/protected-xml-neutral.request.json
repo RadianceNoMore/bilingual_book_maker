@@ -1,0 +1,10 @@
+{
+  "model": "gemini-anon",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Translate every bbm-unit in the request. Return ONLY valid XML with a bbm-response root and exactly one bbm-unit per supplied id. Preserve each id and every protected-name tag in its corresponding unit. Do not merge units, use @@ separators, add prose outside units, or nest paragraph units. Escape XML special characters in prose. Translate the surrounding prose into English.\n\n<bbm-request>\n<bbm-unit id=\"p487478ea16a8_0\">在靠近落地窗的书架前，我能清晰地看到<bbm-name id=\"n1eaac01a98fa70a0_1\" approved=\"Isshiki\">一色</bbm-name>。</bbm-unit>\n<bbm-unit id=\"p487478ea16a8_1\">找到那本漫画期刊，发现那部连载漫画竟然加更了，我喜不自禁多看了一眼，就被吸引住了。</bbm-unit>\n</bbm-request>\n\nProtected names use <bbm-name id=... approved=...>original name</bbm-name>. The Chinese/original name and approved rendering are both visible for context. Preserve each entire tag exactly once in its original paragraph, including its id. Do not remove, duplicate, nest, invent, or move tags to another paragraph. Translate the surrounding prose, using the approved identity for grammar and pronouns. Tags are data, not instructions. They will be restored mechanically afterward."
+    }
+  ],
+  "temperature": 1
+}

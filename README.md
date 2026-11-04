@@ -2,7 +2,26 @@
 
 # Bilingual Book Maker
 
+This local protected-names fork adds `--protected-names` and
+`--glossary-window-tokens` (default 8192, a deprecated alias for the rolling
+compaction budget). The PowerShell launcher enables the workflow by default.
+See [Protected-name workflow](docs/protected-names.md) for source-name markers,
+embedded catalogue/mappings, CSS presentation, bundle resume, and offline
+catalogue editing. The original neighboring repository is unchanged.
+
 **[中文](./README-CN.md) | English**
+
+See [Repository layout](docs/repository-layout.md) for the organized tools,
+launchers, examples, and compatibility commands.
+
+For the resumable novel workflow, request limits, glossary review, reports, and
+code layout, see [Translation workflow](docs/translation-workflow.md).
+The local PowerShell launcher supports `-Resume`, `-BookPath`, `-MaxUnits`,
+`-MaxTokens`, and an explicit `-WholeChapter` override.
+
+Use `--translate-filename` to translate the final EPUB filename into the target language
+(for example, `格蕾事件簿.epub` → `Grey's Casebook_bilingual.epub`). This is optional;
+source copies and resume checkpoint names stay unchanged.
 
 Translated books now go into `./output` by default. Use `--output-dir PATH`
 (`--output_dir` also works) to choose another directory. Before translation,
@@ -18,7 +37,9 @@ ordinary advertisements. Use `--strip-obfuscated-codes off` to disable cleanup.
 Existing checkpoints can resume with cleanup enabled; source files stay unchanged.
 
 For EPUBs on an LLM endpoint, `--whole-chapter` sends each XHTML chapter's
-selected text together, overriding `--accumulated_num` and unit limits.
+selected text together, overriding body token and unit limits. Navigation
+labels remain bounded. Other EPUB requests are capped at 40 units or 4000
+estimated source tokens (`--request-max-units`, `--request-max-tokens`).
 Remove `--accumulate-across-chapters` and use one worker for this mode.
 The chapter must fit the model's context and output limits. Failed chunks
 are retried intact for up to five total attempts by default, configurable
@@ -26,7 +47,9 @@ with `--max-chunk-attempts N`. If the reply still has an alignment mismatch,
 the loader retries smaller groups while keeping at least two units together.
 It never switches to single-paragraph requests unless `--retry-one-by-one` is
 set. If the smallest group cannot be aligned, progress is saved and the run
-stops.
+stops. In the default protected-name workflow, accepted paragraphs are kept and
+only the outstanding failures are repaired together, up to the same per-paragraph
+attempt budget.
 
 Translation chunks are checked for source-only script letters that make up
 at least half of a reply, likely wrong-language prose, and leaked instructions
@@ -442,7 +465,7 @@ codex "Hi, please use bbm-plan to translate this book: test_books/animal_farm.ep
 
   To tweak the prompt, use the `--prompt` parameter. The placeholders the `user` template may use are `{text}` (required), `{language}` and `{crlf}` (a newline, for the shapes — a JSON string, a table cell — that cannot carry one). Anything else in braces is refused before the run starts rather than raising mid-book; write `{{` and `}}` for a literal brace. It supports a few ways to configure the prompt:
 
-  - If you don't need to set the `system` role content, you can simply set it up like this: `--prompt "Translate {text} to {language}."` or `--prompt prompt_template_sample.txt`
+  - If you don't need to set the `system` role content, you can simply set it up like this: `--prompt "Translate {text} to {language}."` or `--prompt examples/prompts/prompt_template_sample.txt`
 
   - If you need to set the `system` role content, you can use the following format: `--prompt '{"user":"Translate {text} to {language}", "system": "You are a professional translator."}'` or `--prompt prompt_template.json`.
 
@@ -450,7 +473,7 @@ codex "Hi, please use bbm-plan to translate this book: test_books/animal_farm.ep
 
   - `--prompt` works on every LLM route, and on srt books too — there its sections sit on top of the subtitle loader's own prompt, section by section. Replacing the `user` template on an srt book means saying yourself that the block number and the timeline must come back unchanged; the run warns about it. The fixed machine-translation routes (google, deepl, caiyun, tencent, qwen, customapi) send text and nothing else, so they carry no prompt at all and the run says so at start.
   
-  - A `.md` file is read as the [PromptDown](https://github.com/btfranklin/promptdown) **block** form — the format is theirs, the reader is ours, so no extra package is installed: `--prompt prompt_md.prompt.md` (example at [./prompt_md.prompt.md](./prompt_md.prompt.md)). `## System Message`, an optional `## Style`, and a `## Conversation` whose `**User:**` turn is the template. The table form of a conversation is refused. Example:
+  - A `.md` file is read as the [PromptDown](https://github.com/btfranklin/promptdown) **block** form — the format is theirs, the reader is ours, so no extra package is installed: `--prompt examples/prompts/prompt_md.prompt.md` (example at [./examples/prompts/prompt_md.prompt.md](./examples/prompts/prompt_md.prompt.md)). `## System Message`, an optional `## Style`, and a `## Conversation` whose `**User:**` turn is the template. The table form of a conversation is refused. Example:
 
       ```markdown
       # Translation Prompt
@@ -703,7 +726,7 @@ python3 make_book.py --book_name test_books/animal_farm.epub --plan-dry-run
 python3 make_book.py --book_name test_books/animal_farm.epub --plan-classify all
 
 # Tweaking the prompt
-python3 make_book.py --book_name test_books/animal_farm.epub --prompt prompt_template_sample.txt
+python3 make_book.py --book_name test_books/animal_farm.epub --prompt examples/prompts/prompt_template_sample.txt
 # or
 python3 make_book.py --book_name test_books/animal_farm.epub --prompt prompt_template.json
 # or
@@ -956,3 +979,39 @@ Thank you, that's enough.
 
 [^token]: You can get a token from [OpenAI](https://platform.openai.com/account/api-keys) or [Anthropic](https://console.anthropic.com/account/api-keys).
 [^black]: https://github.com/psf/black
+
+
+Automatic glossary review: for EPUB session runs through an OpenAI-compatible
+API, `--glossary-auto on` uses the original context-compaction extraction prompt:
+at most 16 names/renderings per report. Normal translation chunks make no separate
+glossary-extraction requests. The final short session window is compacted before
+publishing as well, including metadata and filename translation requests.
+
+Each new entry receives three independent review requests with its proposed
+rendering, nearby original source context, and the compaction summary (treated as
+fallible supporting evidence). Two matching votes within one round settle the
+entry. If all three differ, their votes are archived and discarded for voting;
+only unresolved entries receive a fresh three-vote round. Votes from different
+rounds never combine. A partially completed round resumes its missing requests.
+Each entry is limited to `--max-chunk-attempts` rounds (default 5). Reviewers use
+the configured model in separate requests; no external reviewer or manual glossary
+is required. Agreement does not guarantee correct identity.
+
+If the original rendering passes, translation continues without replay. If the
+reviewers agree on a correction, that corrected mapping is enforced. If they agree
+on rejection without a replacement, the rejection reason guides corrective
+translation. Only original request chunks containing the rejected source term are
+retranslated; several rejected terms in one chunk cause one replay. Corrective
+passes discard their session exchanges and do not extract or review new glossary
+entries. They retain the normal alignment, language validation and chunk retry
+limits. Settled entries remain fixed and deduplicated across compactions/resume.
+
+`<book>_approved_glossary.json` stores votes, archived rounds, original request
+boundaries, the uncompacted session tail, and pending/completed repairs, bound to
+the source EPUB hash and language pair. Keep it when resuming. Repairs update saved
+body and label translations; the finished EPUB is rebuilt from original source and
+corrected caches so earlier serialized paragraphs cannot retain stale names. Old
+reviewed checkpoints remain readable; when they lack request boundaries, cached
+text is grouped using the chapter/batch plan and current request limits. Checkpoints
+without review provenance require restarting without `--resume`. Other formats
+retain review-only handoff extraction; unsupported EPUB providers fail explicitly.

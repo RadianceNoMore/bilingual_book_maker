@@ -3568,12 +3568,12 @@ class TestOperatorFindings:
         # the bare command must not be offered as the thing to run
         assert "python make_book.py --book_name b.epub\n" not in text
 
-    def test_a_run_without_resume_says_it_overwrites_the_cache(self, tmp_path, capsys):
+    def test_a_run_without_resume_archives_the_cache(self, tmp_path, capsys):
         src = tmp_path / ANIMAL_FARM.name
         shutil.copy(ANIMAL_FARM, src)
         (tmp_path / ("." + src.stem + ".temp.bin")).write_bytes(b"x")
         _make_loader(tmp_path, FakeModel)
-        assert "existing progress cache" in capsys.readouterr().out
-        (tmp_path / ("." + src.stem + ".temp.bin")).unlink()
+        assert "Fresh run: archived" in capsys.readouterr().out
+        assert not (tmp_path / ("." + src.stem + ".temp.bin")).exists()
         _make_loader(tmp_path, FakeModel)
-        assert "existing progress cache" not in capsys.readouterr().out
+        assert "Fresh run: archived" not in capsys.readouterr().out

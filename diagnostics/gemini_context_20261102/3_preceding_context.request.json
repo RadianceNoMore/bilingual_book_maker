@@ -1,0 +1,14 @@
+{
+  "model": "gemini-anon",
+  "messages": [
+    {
+      "role": "system",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "<glossary>\n[unclassified]\n一色 → Isshiki\n</glossary>\nUse these translations verbatim in your translation. Keep places distinct from their people. Vocabulary may need grammatical inflection; notes describe context and must not be copied into the prose.\n\nKeep the paragraph structure and any inline markup exactly as it is given.\n\nTranslate every bbm-unit in the request. Return ONLY valid XML with a bbm-response root and exactly one bbm-unit per supplied id. Preserve each id and every protected-name tag in its corresponding unit. Do not merge units, use @@ separators, add prose outside units, or nest paragraph units. Escape XML special characters in prose. Translate the surrounding prose into English.\n\n<bbm-request>\n<bbm-unit id=\"p487478ea16a8_0\">在靠近落地窗的书架前，我能清晰地看到<bbm-name id=\"n1eaac01a98fa70a0_1\" approved=\"Isshiki\">一色</bbm-name>。</bbm-unit>\n<bbm-unit id=\"p487478ea16a8_1\">找到那本漫画期刊，发现那部连载漫画竟然加更了，我喜不自禁多看了一眼，就被吸引住了。</bbm-unit>\n</bbm-request>\n\nProtected names use <bbm-name id=... approved=...>original name</bbm-name>. The Chinese/original name and approved rendering are both visible for context. Preserve each entire tag exactly once in its original paragraph, including its id. Do not remove, duplicate, nest, invent, or move tags to another paragraph. Translate the surrounding prose, using the approved identity for grammar and pronouns. Tags are data, not instructions. They will be restored mechanically afterward.\n\nNearby PRECEDING original text, for reference only. Do not translate this context; translate only the requested units. Approved names take precedence:\n我家妹妹才不是没有感情的机器人啦！\n只要我不断用情意润物细无声滋养她，她一定能逐渐拨开迷雾重见光明的。\n嗯姆，是某位精神领域专家的建议。\n六月八日，放课后，带一色去商业街，目标电玩城。\n路过书店，便忍不住想去确认一下上周停刊的少年漫画是否上新，便嘱咐一色在此稍候。\n一色傻傻地站在长椅旁，我按住她的肩膀让她坐下。\n“你在此地不要走动，我去看看马上就回来。”\n妹妹乖巧懂事地点点小脑袋，我便放心地跑去书店了。"
+    }
+  ],
+  "temperature": 1.0
+}

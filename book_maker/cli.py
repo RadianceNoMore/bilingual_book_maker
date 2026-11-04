@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from rich import print
 from rich.markup import escape
 
+from book_maker.batching import DEFAULT_REQUEST_MAX_UNITS, DEFAULT_REQUEST_MAX_TOKENS
 from book_maker.glossary import Glossary
 from book_maker.workspace import prepare_source
 from book_maker.loader import BOOK_LOADER_DICT
@@ -20,7 +21,7 @@ from book_maker.legacy_cli import translate_legacy_argv
 from book_maker.loader.classify import can_session_classify
 from book_maker.loader.ledger import PlanLedgerError
 from book_maker.loader.plan import GENERAL_GROUP_MAX_UNITS
-from book_maker.prompt_file import parse_prompt_markdown
+from book_maker.prompt_file import parse_prompt_markdown, resolve_prompt_path
 from book_maker.provider_loader import resolve_provider
 from book_maker.session_context import DEFAULT_COMPACT_BUDGET, compact_budget_notice
 from book_maker.translator import (
@@ -474,6 +475,8 @@ def parse_prompt_arg(prompt_arg, announce=True):
     prompt = None
     if prompt_arg is None:
         return prompt
+
+    prompt_arg = resolve_prompt_path(prompt_arg)
 
     # Case-insensitively: `--prompt Config.JSON` named a real file and was
     # silently translated with as a literal template.
@@ -1722,6 +1725,10 @@ def build_parser():
         help="directory for working source copies and resume files (default: ./input)",
     )
     parser.add_argument(
+        "--translate-filename", action="store_true",
+        help="translate the final EPUB filename into the target language; resume filenames stay unchanged",
+    )
+    parser.add_argument(
         "--no-copy-source", action="store_true",
         help="read the original source directly instead of copying it into ./input",
     )
@@ -1979,8 +1986,24 @@ off. Minimum 1.
         help="EPUB only: let --accumulated_num batches continue into the next chapter (sequential execution only).",
     )
     parser.add_argument(
+        "--request-max-units", type=batch_unit_cap, default=DEFAULT_REQUEST_MAX_UNITS,
+        help="EPUB body and TOC request limit (default: 40); whole-chapter bypasses it for body only",
+    )
+    parser.add_argument(
+        "--request-max-tokens", type=batch_unit_cap, default=DEFAULT_REQUEST_MAX_TOKENS,
+        help="EPUB estimated source-token limit per request (default: 4000); individual units stay intact",
+    )
+    parser.add_argument(
         "--whole-chapter", action="store_true",
         help="EPUB: send each selected XHTML chapter in one request, overriding grouping budgets",
+    )
+    parser.add_argument(
+        "--protected-names", action="store_true",
+        help="EPUB: preserve model-selected source names as ${exact label} markers and generate one CSS-driven bilingual EPUB with embedded editable mappings; failed paragraphs are repaired together without retranslating accepted neighbours",
+    )
+    parser.add_argument(
+        "--glossary-window-tokens", type=batch_unit_cap, default=8192,
+        help="deprecated alias for the rolling context-compaction budget in protected-name mode (default: 8192)",
     )
     parser.add_argument(
         "--strip-obfuscated-codes", choices=("on", "off"), default="on",
@@ -1990,11 +2013,11 @@ off. Minimum 1.
         "--max-chunk-attempts",
         type=chunk_attempt_count,
         default=DEFAULT_CHUNK_ATTEMPTS,
-        help=f"maximum complete-chunk attempts before alignment fallback (default: {DEFAULT_CHUNK_ATTEMPTS}; includes the first request)",
+        help=f"maximum complete-chunk attempts before alignment fallback (default: {DEFAULT_CHUNK_ATTEMPTS}; includes the first request); in protected-name mode this is the per-paragraph send budget and failed paragraphs are repaired together",
     )
     parser.add_argument(
         "--retry-one-by-one", action="store_true",
-        help="retry failed EPUB batches paragraph by paragraph; default retries the whole chunk up to --max-chunk-attempts",
+        help="retry failed EPUB batches paragraph by paragraph; default retries the whole chunk up to --max-chunk-attempts. Protected-name mode always repairs the outstanding paragraphs together and ignores this flag",
     )
     parser.add_argument(
         "--no-translate-metadata",
@@ -2139,13 +2162,12 @@ off. Minimum 1.
         dest="glossary_auto",
         choices=("on", "off"),
         default=None,
-        help="whether a session run also keeps the renderings its own handoff "
-        "reports establish, so recurring names stay unified across a context "
-        "window seam. Off unless you ask for it, and it needs a session to "
-        "learn from (--use_context session, or the codex route's one thread) "
-        "as well as a model that can be trusted to answer with names rather "
-        "than prose — most runs need neither. Learned terms live in this run "
-        "and in <book>_handoff.md, and nowhere else",
+        help="for EPUB session runs through OpenAI-compatible APIs, review the normal "
+        "compaction glossary with three independent votes per round; two matching "
+        "votes settle an entry, and split rounds are discarded. Retranslate only "
+        "chunks containing rejected renderings, without learning from those corrective "
+        "passes. Settled entries are never reviewed again. Off unless requested. Other formats "
+        "retain review-only handoff extraction; unsupported EPUB providers fail explicitly",
     )
     parser.add_argument(
         "--context_paragraph_limit",
@@ -2505,6 +2527,14 @@ def main():
         exit(1)
 
     book_type = get_book_type(options.book_name)
+    if options.protected_names:
+        if book_type != 'epub' or api_format not in LLM_FORMATS:
+            raise SystemExit('--protected-names requires an EPUB and an LLM API route')
+        if (options.parallel_workers > 1 or options.sentence_mode or options.batch_flag
+                or options.batch_use_flag or options.retranslate):
+            raise SystemExit('--protected-names requires sequential grouped translation without sentence, batch-job, or retranslate modes; --retry-one-by-one is accepted but marker mode always repairs outstanding paragraphs together')
+    if options.translate_filename and book_type != "epub":
+        raise SystemExit("--translate-filename currently supports EPUB books only")
     if options.retry_one_by_one and book_type != "epub":
         raise SystemExit("--retry-one-by-one applies to EPUB batches only")
     if options.whole_chapter:
@@ -2635,6 +2665,9 @@ def main():
         loader_kwargs["language_tag"] = target.tag
         loader_kwargs["disclose"] = options.disclosure
         loader_kwargs["translation_metadata"] = options.translation_metadata
+        # Known before the loader can consult a legacy checkpoint. The
+        # marker workflow must not let load_state consume an old pickle.
+        loader_kwargs["protected_names"] = options.protected_names
     elif not options.disclosure:
         print(
             "[bold yellow]Warning:[/bold yellow] --no_disclosure is ignored for "
@@ -2870,9 +2903,14 @@ def main():
         e.translate_model.substrict_batch_cap = max(1, batch_units // 2)
     if book_type == "epub":
         e.strip_obfuscated_codes = options.strip_obfuscated_codes == "on"
+        e.translate_model.protected_names = options.protected_names
+        e.glossary_window_tokens = options.glossary_window_tokens
         e.accumulate_across_chapters = options.accumulate_across_chapters
         e.translate_metadata = not options.no_translate_metadata
+        e.translate_filename = options.translate_filename
         e.whole_chapter = options.whole_chapter
+        e.request_max_units = options.request_max_units
+        e.request_max_tokens = options.request_max_tokens
         e.retry_one_by_one = options.retry_one_by_one
         e.translate_model.whole_chapter = options.whole_chapter
         e.translate_model.retry_one_by_one = options.retry_one_by_one

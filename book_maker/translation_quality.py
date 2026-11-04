@@ -164,17 +164,25 @@ def _detected_language(text):
     return ranked[0].lang.lower()
 
 
-def untranslated_reason(source, reply, target_language, source_language=None):
+def untranslated_reason(source, reply, target_language, source_language=None, *, detect_language=True, marker_text=False):
     """Return a high-confidence reason to retry, or None when it passes.
 
     Source-only writing systems are rejected when they make up at least half
     of the reply's letters. When source and target share an alphabet, a
-    deterministic language identifier checks only substantial prose.
+    deterministic language identifier checks only substantial prose. Offline
+    final audits can skip that expensive pass; translation-time checks use it.
+
+    ``marker_text`` masks validated ``${label}`` contents before the
+    source-script check. It never exempts prose outside a marker.
     """
     if not isinstance(reply, str):
         return None
 
     original, translated = _clean(source), _clean(reply)
+    if marker_text:
+        from book_maker.marker_names import strip_markers
+
+        original, translated = strip_markers(original), strip_markers(translated)
     original_normalized = _SPACE.sub(" ", original).strip().casefold()
     translated_normalized = _SPACE.sub(" ", translated).strip().casefold()
 
@@ -220,7 +228,7 @@ def untranslated_reason(source, reply, target_language, source_language=None):
     ):
         return "reply is Han-only and lacks the kana normally present in Japanese prose"
 
-    detected = _detected_language(translated)
+    detected = _detected_language(translated) if detect_language else None
     same_language = detected == target or (
         target in {"no", "nb", "nn"} and detected in {"no", "nb", "nn"}
     ) or (target == "zh" and detected in {"zh", "zh-cn", "zh-tw"})
@@ -249,11 +257,14 @@ def untranslated_reason(source, reply, target_language, source_language=None):
     return None
 
 
-def validate_translation_texts(sources, replies, target_language, source_language=None):
+def validate_translation_texts(sources, replies, target_language, source_language=None, *, marker_text=False):
     """Reject a complete chunk when any slot is untranslated or contaminated."""
     failures = []
     for index, (source, reply) in enumerate(zip(sources, replies), 1):
-        reason = untranslated_reason(source, reply, target_language, source_language)
+        reason = untranslated_reason(
+            source, reply, target_language, source_language,
+            marker_text=marker_text,
+        )
         if reason:
             failures.append(f"slot {index}: {reason} ({str(reply)[:70]!r})")
     if failures:
