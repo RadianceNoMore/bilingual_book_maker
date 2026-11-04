@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from lxml import etree
 
-from book_maker.marker_names import MarkerError, validate_batch
+from book_maker.marker_names import MarkerError, WINDOW_WORKFLOW, validate_batch
 from book_maker.marker_workflow import (
     MarkerValidationError,
     MarkerWorkflow,
@@ -1150,6 +1150,54 @@ def _adapter_ids(messages):
     end = content.index("</bbm-request>", start) + len("</bbm-request>")
     root = etree.fromstring(content[start:end].encode())
     return [node.get("id") for node in root]
+
+
+def test_window_repair_sends_exact_counts_without_rejected_marker_text(tmp_path, capsys):
+    model = AdapterModel([
+        ('<bbm-response><bbm-unit id="a">${美琴} smiled.</bbm-unit>'
+         '<bbm-unit id="b">${user_name_1} ran away.</bbm-unit></bbm-response>', "stop"),
+        ('<bbm-response><bbm-unit id="b">Isshiki ran away.</bbm-unit></bbm-response>', "stop"),
+    ])
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"window repair")
+    workflow = MarkerWorkflow(model, str(source), settings={"workflow": WINDOW_WORKFLOW})
+    saved = []
+    result = workflow.translate(
+        ["${美琴}笑了。", "一色逃掉了。"], model.translate_marker_units,
+        lambda *_: None, identities=["a", "b"], premarked=True,
+        persist=lambda: saved.append([row["identity"] for row in workflow.recovery_entries()]),
+    )
+    assert result == ["${美琴} smiled.", "Isshiki ran away."]
+    assert [_adapter_ids(messages) for messages in model.sends] == [["a", "b"], ["b"]]
+    repair = model.sends[1][-1]["content"]
+    assert '"id":"b","expected_marker_counts":{}' in repair
+    assert "means zero markers" in repair
+    assert "${user_name_1}" not in repair
+    assert saved[0] == ["a"]
+    assert model.session.messages() == []
+    output = capsys.readouterr().out
+    assert "paragraph b failed attempt 1/5 at validation" in output
+    assert "extra_or_duplicated" in output
+
+
+def test_window_exhaustion_exposes_marker_reason_and_preserves_accepted_sibling(tmp_path):
+    model = AdapterModel([
+        ('<bbm-response><bbm-unit id="a">${美琴} smiled.</bbm-unit>'
+         '<bbm-unit id="b">She ran away.</bbm-unit></bbm-response>', "stop"),
+        ('<bbm-response><bbm-unit id="b">She ran away.</bbm-unit></bbm-response>', "stop"),
+    ], max_attempts=2)
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"window exhaustion")
+    workflow = MarkerWorkflow(model, str(source), settings={"workflow": WINDOW_WORKFLOW})
+    with pytest.raises(MarkerValidationError, match="Validation details:.*missing="):
+        workflow.translate(
+            ["${美琴}笑了。", "${一色}逃掉了。"], model.translate_marker_units,
+            lambda *_: None, identities=["a", "b"], premarked=True,
+        )
+    repair = model.sends[1][-1]["content"]
+    assert '"expected_marker_counts":{"一色":1}' in repair
+    assert workflow.recovery_master("a", "${美琴}笑了。") == "${美琴} smiled."
+    assert workflow.recovery_master("b") is None
 
 
 def test_truncated_marker_response_keeps_complete_units_and_repairs_the_rest(tmp_path):

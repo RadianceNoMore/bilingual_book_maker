@@ -1341,12 +1341,12 @@ class ChatGPTAPI(Base):
         """Translate one XML paragraph frame carrying source-name markers."""
         from book_maker.marker_workflow import assemble_marker_request
 
-        # Initial attempts and retries use the identical translation prompt.
-        # Validation feedback stays local and never reaches the provider.
+        # Prepared-window repairs carry source-derived marker constraints.
+        # Legacy translation continues to keep validation feedback local.
         content = assemble_marker_request(
             payload,
             language=getattr(self, "language", None) or "english",
-            feedback="",
+            feedback=feedback if premarked else "",
             premarked=premarked,
             context=context,
         )
