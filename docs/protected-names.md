@@ -1,15 +1,40 @@
 Retries send only outstanding paragraphs using the normal translation prompt and the context captured before the batch. Validation errors remain local; partial batch results and retry instructions are not sent to the model. Accepted results are still saved immediately.
 
-# Protected-name fork: source markers and CSS
+# Protected names: source windows, exact markers, and CSS
 
-This fork implements the `source-markers-css-v1` workflow. It is separate from
-the earlier prepared-window/voting implementation and from the original
-repository's glossary mode.
+Fresh protected-name EPUB runs use `source-window-markers-css-v2`. The earlier
+`source-markers-css-v1` archives remain readable by the offline marker tools,
+but are not resumable as v2 because they used model-selected markers and a
+different context contract. The older v1 protocol notes below are retained as
+recovery history only.
+
+## Current v2 workflow
+
+The novel is processed sequentially in source windows with a default budget of
+8,192 estimated tokens. Each window follows this order:
+
+1. Send the complete cleaned original-language window and the preceding
+   cumulative source-language summary in one name-extraction request.
+2. Validate exact source spellings and cited unit IDs, add every label to the
+   persistent novel catalogue, and insert `${name}` locally. Matches reserve
+   spans longest-first, with a lexical tie-break; overlapping short names do
+   not split a longer name, while separate short-name occurrences still match.
+3. Translate bounded chunks from that prepared window. Each request receives
+   the same frozen prior summary and a bounded accepted original-source prefix.
+   Every prepared marker must appear exactly once in its own returned unit.
+4. After all window units are accepted, summarize the original source together
+   with the previous summary. Save the cumulative summary before preparing the
+   next window, including the final partial window.
+
+Extraction contains names only; it does not summarize upcoming events. The
+translation chunks do not receive target-language history. Extraction and
+summary are independent provider stages, and token-triggered session
+compaction is disabled in this workflow.
 
 ## Run
 
 ```powershell
-Set-Location C:\Users\Tina_\Documents\PlayingWithRepo\bilingual_book_maker-protected-names
+Set-Location C:\Users\Tina_\Documents\PlayingWithRepo\bilingual_book_maker-window-names
 ./run_grey_translation.ps1 -BookPath 'C:\Books\novel.epub'
 ./run_grey_translation.ps1 -BookPath 'C:\Books\novel.epub' -Resume
 ```
@@ -26,18 +51,65 @@ Useful launcher values:
   protected-name mode (including its first request) and bounds display-mapping
   attempts. `--retry-one-by-one` is ignored there: marker mode always repairs
   the outstanding failed paragraphs together.
-- `-GlossaryWindowTokens` (default 8192) is retained as a deprecated alias
-  for the rolling context-compaction budget. `--context-compact-at` wins when
-  both are supplied.
+- `-NameWindowTokens` (default 8192) bounds original-source extraction
+  windows.
+- `-SourceSummaryTokens` (default 1500) bounds the cumulative source-language
+  summary.
+- `--request-max-units` and `--request-max-tokens` bound translation chunks;
+  they never combine different source windows.
 - `-WholeChapter` and `-AccumulateAcrossChapters` retain their usual meaning.
 
 Direct Python runs add `--protected-names`. The route must be
-OpenAI-compatible and provide paragraph and mapping requests; parallel,
-sentence, provider batch-job, and retranslate modes are rejected.
-`--retry-one-by-one` is accepted but has no effect: marker mode always repairs
-the outstanding failed paragraphs together.
+OpenAI-compatible and provide paragraph, name-extraction, source-summary, and
+mapping requests. Parallel, sentence, provider batch-job, and retranslate
+modes are rejected. `--glossary-window-tokens` is rejected in this mode; use
+`--name-window-tokens`. Explicit `--context-compact-at` and
+`--no-context-compact` are rejected because the source summary advances only
+after a whole window is translated.
 
-## Translation protocol
+The launcher prints each stage, window ID, source and context token estimates,
+chunk and unit IDs, retry count, and accepted/checkpointed progress. On failure
+it states whether the request was sent, what failed validation, which work is
+saved, and which stage resume will retry. Provider requests are bounded by the
+configured output allowance where the endpoint supports a token cap; exact
+input-limit preflight is available only if the route exposes its limit.
+
+## v2 extraction and catalogue
+
+The extraction response is strict JSON with one `window_id` and a `names`
+array. Each row contains an exact `source` spelling and current-window
+`unit_ids`; unknown units, ungrounded spellings, extra keys, and malformed JSON
+stop before body translation. An explicit empty array means no names were
+found. A malformed response may retry within the bounded extraction budget.
+
+Once prepared, each exact label is added to the embedded catalogue before the
+first translation chunk. Existing labels reuse their stable SHA-256 key.
+Extraction provenance records the window, cited units, and matched spans;
+accepted translation occurrence counts remain separate. Later summaries may
+omit a label without removing it from the catalogue. Checkpoint publication
+keeps extraction, catalogue changes, and prepared bracket spans together.
+
+## v2 translation and summary validation
+
+The translator is told to copy every supplied marker exactly once in the same
+unit and to translate only surrounding prose. Missing, extra, renamed,
+translated, duplicated, or cross-unit markers fail that unit. Valid siblings
+stay saved; retries send only outstanding units using the same prepared source
+and frozen context. A resume reuses committed extraction and accepted work.
+
+The cumulative summary is generated from the original-language source, not
+translated prose. It must retain earlier consequential facts while adding the
+current window, fit `--source-summary-tokens`, use the source language, and
+contain only known exact labels inside `${...}`. If summary generation fails,
+the accepted translations and previous summary remain saved, and the next
+window does not start. Resume retries the pending summary only.
+
+Exact local matching cannot guarantee that extraction found every name or
+distinguished an ordinary-word homonym. It guarantees only that every selected
+source span is inserted longest-first and preserved exactly by accepted
+translation units.
+
+## Previous v1 translation protocol (archived)
 
 Model-selected names are written as literal markers:
 
@@ -212,6 +284,10 @@ The finished EPUB contains the authoritative catalogue and resumable state at
   settings, status, and a unique run id;
 - checkpoint: ordered accepted job IDs, marked translations, localized
   masters, plan fingerprint, and cleanup version;
+- source-window recovery in v2: frozen ordered windows and source digests,
+  exact extracted labels and selected spans, extraction request fingerprints,
+  accepted unit translations, incoming and outgoing cumulative summaries, and
+  summary validation metadata;
 - paragraph recovery journal (optional): versioned accepted marked text keyed
   by the stable source-unit/localization identity plus source digest; entries
   are promoted into the checkpoint and removed when the batch completes;
@@ -238,7 +314,7 @@ No pickles or external sidecars are used in this mode. Fresh runs ignore old
 not migrate or delete them. A resume without a compatible recovery leaves
 legacy state where it is and starts a fresh run.
 
-## Rolling context
+## Rolling context in legacy v1 recoveries
 
 Accepted exchanges are replayed as source-language marker text. Compaction
 at 8192 estimated tokens asks for the normal Summary/Style content, with no
@@ -686,11 +762,11 @@ rebuild-context evidence (`canonical_evidence_exchanges`), so replayed,
 reconstructed, and live requests cannot drift apart;
 `marker_unit_request` exposes the same assembly for one-shot requests and
 rejects repair misuse. The context-budget estimator counts the reminder and
-example overhead, exactly as with the rest of the message. Display-mapping
-and summary-compaction requests deliberately do not use this assembly; they
-perform different tasks and keep their own prompts and provider-error
-protections. Historical saved exchanges are not rewritten; all newly built
-requests and evidence use the shared assembly.
+example overhead, exactly as with the rest of the message. Display mapping,
+name extraction, and source-window summary requests use their own prompts and
+source-only contexts. Historical saved exchanges are not rewritten; v2
+prepared translation requests carry the frozen prior source-language summary
+explicitly and do not append target-language exchanges.
 
 Failed paragraphs are resent together in one repair request. Repair feedback
 is tailored to the actual failure type, using narrowly scoped structured
@@ -789,7 +865,7 @@ The five outstanding paragraphs will receive the reinforced prompt on
 their next actual send; saved accepted paragraphs and display mappings
 remain reusable, and the ordinary resume command is unchanged
 (`scripts/run_grey_translation.ps1 -Resume`).
-# Translation-only compaction (2026-11-04)
+# Translation-only compaction in legacy v1 recoveries (2026-11-04)
 
 Marker compaction receives accepted translated responses and the previous
 validated summary, not original source requests, translation examples, or

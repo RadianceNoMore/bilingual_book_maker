@@ -107,6 +107,9 @@ class FakeMarkerModel:
         self.translations = dict(type(self).default_translations)
         self.mapping_targets = dict(type(self).default_mapping_targets or {})
         self.requests = []
+        self.stage_calls = []
+        self.extraction_summaries = []
+        self.translation_contexts = []
 
     @classmethod
     def reset(cls, fail_at_call=None, mapping_targets=None, translations=None):
@@ -128,18 +131,72 @@ class FakeMarkerModel:
         self.session.reset(seed=summary)
         self.compactions += 1
 
-    def translate_marker_units(self, payload, feedback=""):
+    def _translate_source(self, source):
+        source = re.sub(r"\$\{([^{}]+)\}", r"\1", source)
+        return self.translations[source]
+
+    def standing_instructions(self):
+        return "offline test system instructions"
+
+    def extract_window_names(self, prompt):
+        data = json.loads(prompt.rsplit("\n", 1)[-1])
+        self.stage_calls.append(("extract", data["window_id"]))
+        self.extraction_summaries.append(
+            data["prior_original_language_summary"]
+        )
+        candidates = {
+            label
+            for value in self.translations.values()
+            for label in re.findall(r"\$\{([^{}]+)\}", value)
+        }
+        rows = []
+        for unit in data["units"]:
+            for label in sorted(candidates, key=lambda value: (-len(value), value)):
+                if label in unit["source"]:
+                    row = next((entry for entry in rows if entry["source"] == label), None)
+                    if row is None:
+                        row = {"source": label, "unit_ids": []}
+                        rows.append(row)
+                    if unit["unit_id"] not in row["unit_ids"]:
+                        row["unit_ids"].append(unit["unit_id"])
+        return json.dumps(
+            {"window_id": data["window_id"], "names": rows}, ensure_ascii=False
+        )
+
+    def summarize_source_window(self, prompt, *, max_tokens):
+        data = json.loads(prompt.rsplit("\n", 1)[-1])
+        window_id = next(
+            (identity for kind, identity in reversed(self.stage_calls) if kind == "extract"),
+            "unknown",
+        )
+        self.stage_calls.append(("summary", window_id))
+        candidates = {
+            label
+            for value in self.translations.values()
+            for label in re.findall(r"\$\{([^{}]+)\}", value)
+        }
+        source = " ".join(
+            row["source"] for row in data["completed_current_window_source"]
+        )
+        for label in sorted(candidates, key=lambda value: (-len(value), value)):
+            source = source.replace(label, f"${{{label}}}")
+        prior = data.get("prior_original_language_summary") or ""
+        return (prior + " " + source).strip() or "The source window contains no events."
+
+    def translate_marker_units(self, payload, feedback="", *, premarked=False, context=None):
         type(self).calls += 1
         self.requests.append(payload)
+        self.translation_contexts.append(context)
         if type(self).fail_at_call is not None and type(self).calls > type(self).fail_at_call:
             raise KeyboardInterrupt
         root = etree.fromstring(payload.encode())
         units = []
         for node in root:
             source = node.text or ""
+            self.stage_calls.append(("translate", node.get("id")))
             units.append(
                 f'<bbm-unit id="{node.get("id")}">'
-                f"{self.translations[source]}</bbm-unit>"
+                f"{self._translate_source(source)}</bbm-unit>"
             )
         return "<bbm-response>\n" + "\n".join(units) + "\n</bbm-response>"
 
@@ -194,7 +251,7 @@ class TruncatingAdapterModel(FakeMarkerModel):
                 parts.append(f'<bbm-unit id="{identity}">partial')
             else:
                 parts.append(
-                    f'<bbm-unit id="{identity}">{self.translations[source]}</bbm-unit>'
+                    f'<bbm-unit id="{identity}">{self._translate_source(source)}</bbm-unit>'
                 )
         raw = "<bbm-response>" + "".join(parts)
         finish = "length" if mode == "truncate" else "stop"
@@ -285,7 +342,7 @@ class RepairAdapterModel(FakeMarkerModel):
         if mode == "interrupt":
             raise KeyboardInterrupt
         parts = [
-            f'<bbm-unit id="{identity}">{self.translations[source]}</bbm-unit>'
+            f'<bbm-unit id="{identity}">{self._translate_source(source)}</bbm-unit>'
             for identity, source in units
         ]
         raw = "<bbm-response>" + "".join(parts) + "</bbm-response>"
@@ -370,12 +427,12 @@ class AttributionAdapterModel(FakeMarkerModel):
                 f'<bbm-unit id="{second_id}">${{Bob}} BAD first</bbm-unit>'
                 "</bbm-unit>"
                 f'<bbm-unit id="{second_id}">${{Bob}} BAD second</bbm-unit>'
-                f'<bbm-unit id="{third_id}">{self.translations[third]}</bbm-unit>'
+                f'<bbm-unit id="{third_id}">{self._translate_source(third)}</bbm-unit>'
                 "</bbm-response>"
             )
         else:
             parts = [
-                f'<bbm-unit id="{identity}">{self.translations[source]}</bbm-unit>'
+            f'<bbm-unit id="{identity}">{self._translate_source(source)}</bbm-unit>'
                 for identity, source in units
             ]
             raw = "<bbm-response>" + "".join(parts) + "</bbm-response>"
@@ -431,8 +488,10 @@ def test_tiny_marker_run_interrupts_resumes_and_finishes(tmp_path):
     assert first_state["run"]["status"] == "partial"
     first_run_id = first_state["run"]["run_id"]
     assert len(first_run_id) >= 32
-    assert first_state["session"]["last_summary"].startswith("Summary with ${")
-    assert first_state["diagnostics"]["compactions"]
+    assert first_state["session"]["last_summary"].startswith("${Alice}")
+    assert first_state["source_windows"]["windows"][0]["status"] == "complete"
+    assert first_state["source_windows"]["windows"][1]["status"] == "prepared"
+    assert first_state["diagnostics"]["compactions"] == []
     assert not (tmp_path / ".book.temp.bin").exists()
 
     FakeMarkerModel.reset(fail_at_call=None)
@@ -484,6 +543,34 @@ def test_tiny_marker_run_interrupts_resumes_and_finishes(tmp_path):
         )
     ]
     assert leftovers == []
+
+
+def test_each_window_extracts_translates_then_updates_cumulative_summary(tmp_path):
+    source = tmp_path / "book.epub"
+    _write_book(source)
+    output = tmp_path / "output" / "book_bilingual.epub"
+    FakeMarkerModel.reset(fail_at_call=None)
+
+    loader = _loader(source, resume=False)
+    loader.make_bilingual_book()
+
+    calls = loader.translate_model.stage_calls
+    assert [kind for kind, _identity in calls] == [
+        "extract", "translate", "summary", "extract", "translate", "summary"
+    ]
+    assert [calls[index][1] for index in (0, 2, 3, 5)] == [
+        "w000001", "w000001", "w000002", "w000002"
+    ]
+    assert loader.translate_model.extraction_summaries[0] == ""
+    assert loader.translate_model.extraction_summaries[1]
+    assert "${Alice}" in loader.translate_model.extraction_summaries[1]
+    assert "${Bob}" in loader.translate_model.extraction_summaries[1]
+    assert loader.translate_model.translation_contexts[0]["summary"] == ""
+    assert (
+        loader.translate_model.translation_contexts[1]["summary"]
+        == loader.translate_model.extraction_summaries[1]
+    )
+    assert read_state(output)["run"]["status"] == "complete"
 
 
 def test_source_backed_navigation_is_captured_and_editable(tmp_path):
@@ -682,7 +769,7 @@ def test_resume_promotes_paragraph_journal_before_the_chunk_returns(tmp_path):
         }
         fail_repair = True
 
-        def translate_marker_units(self, payload, feedback=""):
+        def translate_marker_units(self, payload, feedback="", *, premarked=False, context=None):
             type(self).calls += 1
             self.requests.append(payload)
             root = etree.fromstring(payload.encode())
@@ -695,7 +782,7 @@ def test_resume_promotes_paragraph_journal_before_the_chunk_returns(tmp_path):
                     if index == 1:
                         text = "${白井黑子}挥了挥手。"
                     else:
-                        text = self.translations[source_text]
+                        text = self._translate_source(source_text)
                     units.append(
                         f'<bbm-unit id="{node.get("id")}">{text}</bbm-unit>'
                     )
@@ -720,10 +807,13 @@ def test_resume_promotes_paragraph_journal_before_the_chunk_returns(tmp_path):
     recovery = next(ongoing.glob("book-*_bilingual_temp.epub"))
     state = read_state(recovery)
     journal = state["paragraph_recovery"]["entries"]
-    assert len(journal) == 1
-    assert journal[0]["master"] == "${Alice}遇见了${Bob}。"
-    assert state["checkpoint"]["translations"] == []
-    assert set(state["catalogue"]) == {"Alice", "Bob"}
+    assert journal == []
+    assert state["checkpoint"]["translations"] == ["${Alice}遇见了${Bob}。"]
+    first_window = state["source_windows"]["windows"][0]
+    assert first_window["accepted_unit_ids"] == [first_window["units"][0]["unit_id"]]
+    assert first_window["units"][0]["translation"] == "${Alice}遇见了${Bob}。"
+    assert set(state["catalogue"]) == {"Alice", "Bob", "Carol"}
+    assert state["catalogue"]["Carol"]["count"] == 0
     assert all("白井黑子" not in item["assistant"]
                for item in state["session"]["exchanges"])
     with zipfile.ZipFile(recovery) as archive:
@@ -736,7 +826,7 @@ def test_resume_promotes_paragraph_journal_before_the_chunk_returns(tmp_path):
     class ResumeModel(FakeMarkerModel):
         default_translations = JournalModel.default_translations
 
-        def translate_marker_units(self, payload, feedback=""):
+        def translate_marker_units(self, payload, feedback="", *, premarked=False, context=None):
             type(self).calls += 1
             self.requests.append(payload)
             root = etree.fromstring(payload.encode())
@@ -745,7 +835,7 @@ def test_resume_promotes_paragraph_journal_before_the_chunk_returns(tmp_path):
             assert "Alice met Bob." not in (node.text or "")
             return (
                 f'<bbm-response><bbm-unit id="{node.get("id")}">'
-                f"{self.translations[node.text]}</bbm-unit></bbm-response>"
+                f"{self._translate_source(node.text or '')}</bbm-unit></bbm-response>"
             )
 
     ResumeModel.reset()
@@ -794,10 +884,12 @@ def test_resume_upgrades_version_two_localization_without_body_retranslation(
     assert state["localization"]["version"] == 3
     assert state["localization"]["destinations"]
     assert state["checkpoint"]["translations"][: len(accepted)] == accepted
-    assert not any(
-        "Alice met Bob." in request
-        for request in resumed.translate_model.requests
-    )
+    body_requests = [
+        request for request in resumed.translate_model.requests
+        if "<bbm-request>" in request
+    ]
+    assert body_requests
+    assert all(":one.xhtml:" not in request for request in body_requests)
     _assert_no_tokens(output, resumed.translate_model)
 
 
@@ -820,12 +912,16 @@ def test_real_adapter_truncation_journals_then_resumes_without_resending(tmp_pat
     recovery = next(ongoing.glob("book-*_bilingual_temp.epub"))
     state = read_state(recovery)
     journal = state["paragraph_recovery"]["entries"]
-    assert len(journal) == 1
-    assert journal[0]["master"] == TRANSLATIONS["Alice met Bob."]
-    assert state["checkpoint"]["translations"] == []
+    assert journal == []
+    assert state["checkpoint"]["translations"] == [
+        TRANSLATIONS["Alice met Bob."]
+    ]
+    assert state["source_windows"]["windows"][0]["accepted_unit_ids"] == [
+        state["source_windows"]["windows"][0]["units"][0]["unit_id"]
+    ]
     first_ids = [unit[0] for unit in TruncatingAdapterModel.sent_requests[0]]
     assert len(first_ids) == 2
-    assert journal[0]["identity"] == first_ids[0]
+    assert state["checkpoint"]["accepted_job_ids"] == [first_ids[0]]
     with zipfile.ZipFile(recovery) as archive:
         first_chapter = archive.read("EPUB/one.xhtml").decode()
     assert "遇见了" in first_chapter
@@ -883,7 +979,12 @@ def test_resume_after_ambiguous_ids_reuses_the_safe_sibling(tmp_path):
     assert [entry["identity"] for entry in journal] == [first_ids[2]]
     assert journal[0]["master"] == ATTRIBUTION_TRANSLATIONS["Dave left."]
     assert state["checkpoint"]["translations"] == []
-    assert set(state["catalogue"]) == {"Dave"}
+    assert set(state["catalogue"]) == {"Alice", "Bob", "Carol", "Dave"}
+    assert state["catalogue"]["Dave"]["count"] == 1
+    assert all(
+        state["catalogue"][label]["count"] == 0
+        for label in ("Alice", "Bob", "Carol")
+    )
     with zipfile.ZipFile(recovery) as archive:
         chapter = archive.read("EPUB/one.xhtml").decode()
     assert "离开了" in chapter
@@ -922,7 +1023,7 @@ def _recovery_chunk_loader(source, resume, model):
     return loader
 
 
-def test_poisoned_context_is_quarantined_rebuilt_and_persisted(tmp_path):
+def test_window_resume_ignores_legacy_target_history_and_uses_source_summary(tmp_path):
     source = tmp_path / "book.epub"
     _write_three_paragraph_book(source)
     output = tmp_path / "output" / "book_bilingual.epub"
@@ -943,26 +1044,16 @@ def test_poisoned_context_is_quarantined_rebuilt_and_persisted(tmp_path):
     _poison_recovery(recovery)
 
     RepairAdapterModel.reset(translations=ATTRIBUTION_TRANSLATIONS)
-    RepairAdapterModel.reset_rebuild([REBUILD_SUMMARY])
     RepairAdapterModel.reset_script(["complete"])
     resumed = _recovery_chunk_loader(source, True, RepairAdapterModel)
     resumed.make_bilingual_book()
     assert output.exists()
 
-    # The rebuild ran once, before any paragraph send (the workflow gate
-    # only opens after the verified replacement is installed and saved).
+    # V2 ignores legacy target-language session history. It resumes from the
+    # validated source summary already stored with the window, with no rebuild.
     modes = [action[0] for action in RepairAdapterModel.actions]
-    assert modes == ["rebuild", "send"]
-    compaction_request = "\n".join(
-        RepairAdapterModel.received_compactions[0]
-    )
-    # The bad seed/summary never reaches a request ...
-    for fragment in ("hard time", "something went wrong", "目标"):
-        assert fragment not in compaction_request
-    # Only accepted translated masters reach compaction, not source requests.
-    # This fixture translates English source into Chinese.
-    assert "Dave left." not in compaction_request
-    assert "${Dave}离开了。" in compaction_request
+    assert modes == ["send"]
+    assert RepairAdapterModel.received_compactions == []
 
     # Only the two outstanding paragraphs were translated; the accepted
     # journal sibling is reused without a resend.
@@ -977,26 +1068,18 @@ def test_poisoned_context_is_quarantined_rebuilt_and_persisted(tmp_path):
     # No catalogue recount with a duplicate rebuild registration.
     assert {entry["count"] for entry in state["catalogue"].values()} == {1}
     session = state["session"]
-    assert PROVIDER_BOILERPLATE not in (session["seed"] or "")
-    assert OTHER_PROVIDER_BOILERPLATE not in (session["last_summary"] or "")
-    assert session["context_repair"]["pending"] is False
-    # A later on-run compaction may legitimately supersede the rebuild seed,
-    # but it must stay a validated summary, consistent with last_summary.
-    assert session["seed"] and session["seed"] == session["last_summary"]
-    assert session["context_validation"]["version"] == 1
-    rebuild_events = [
-        event
-        for event in state["diagnostics"]["compactions"]
-        if event.get("purpose") == "resume-auto-rebuild"
-    ]
-    assert rebuild_events and rebuild_events[-1]["status"] == "ok"
-    assert any(
-        failure["stage"] == "context-restore"
-        for failure in state["diagnostics"]["failures"]
+    assert session["seed"] == ""
+    assert session["exchanges"] == []
+    assert session["last_summary"] == state["source_windows"]["current_summary"]
+    assert PROVIDER_BOILERPLATE not in json.dumps(
+        RepairAdapterModel.actions, ensure_ascii=False
+    )
+    assert OTHER_PROVIDER_BOILERPLATE not in json.dumps(
+        RepairAdapterModel.actions, ensure_ascii=False
     )
 
 
-def test_pending_repair_stops_run_without_new_requests(tmp_path):
+def test_window_resume_does_not_use_legacy_context_repair_state(tmp_path):
     source = tmp_path / "book.epub"
     _write_three_paragraph_book(source)
     output = tmp_path / "output" / "book_bilingual.epub"
@@ -1010,21 +1093,22 @@ def test_pending_repair_stops_run_without_new_requests(tmp_path):
     recovery = next(ongoing.glob("book-*_bilingual_temp.epub"))
     _poison_recovery(recovery)
 
-    # The plain adapter cannot rebuild context; the pending-repair gate must
-    # stop the run before the first new provider request, still saving.
-    AttributionAdapterModel.reset_script([])
+    # V2 ignores the poisoned target-language history and continues with its
+    # validated original-source window state.
+    AttributionAdapterModel.reset_script(["complete"])
     resumed = _recovery_chunk_loader(source, True, AttributionAdapterModel)
-    with pytest.raises(SystemExit) as stopped:
-        resumed.make_bilingual_book()
-    assert stopped.value.code == 1
-    assert not output.exists()
-    assert AttributionAdapterModel.sent_requests == []
-    assert "目标" not in json.dumps(
-        resumed.translate_model.requests, ensure_ascii=False
+    resumed.make_bilingual_book()
+    assert output.exists()
+    assert len(AttributionAdapterModel.sent_requests) == 1
+    request_data = json.dumps(
+        AttributionAdapterModel.sent_requests, ensure_ascii=False
     )
-    state = read_state(recovery)
-    assert state["run"]["status"] == "partial"
-    assert state["session"]["context_repair"]["pending"] is True
-    # The quarantine survives the save, so no later resume can blink past it.
+    assert PROVIDER_BOILERPLATE not in request_data
+    assert OTHER_PROVIDER_BOILERPLATE not in request_data
+    state = read_state(output)
+    assert state["run"]["status"] == "complete"
+    assert state["session"]["seed"] == ""
+    assert state["session"]["exchanges"] == []
+    assert state["session"]["last_summary"] == state["source_windows"]["current_summary"]
     assert state["session"]["seed"] == ""
 

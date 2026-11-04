@@ -2,10 +2,12 @@
 
 # Bilingual Book Maker
 
-This local protected-names fork adds `--protected-names` and
-`--glossary-window-tokens` (default 8192, a deprecated alias for the rolling
-compaction budget). The PowerShell launcher enables the workflow by default.
-See [Protected-name workflow](docs/protected-names.md) for source-name markers,
+This local protected-names fork adds `--protected-names`, `--name-window-tokens`
+(default 8192), and `--source-summary-tokens` (default 1500). The PowerShell
+launcher enables window-first name extraction and the cumulative source summary
+by default. `--glossary-window-tokens` remains a legacy alias for rolling
+compaction and is rejected with `--protected-names`. See
+[Protected-name workflow](docs/protected-names.md) for source-name markers,
 embedded catalogue/mappings, CSS presentation, bundle resume, and offline
 catalogue editing. The original neighboring repository is unchanged.
 

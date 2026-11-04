@@ -18,8 +18,10 @@ place. Its defaults group paragraphs within a chapter, closing a request at
 
 These limits are a conservative starting point, not a measured optimum for every
 model. Output, prompts, glossary, and session history require additional context
-space. A single oversized paragraph stays intact; inspect or preprocess such a
-paragraph if it exceeds the endpoint's capacity.
+space. Ordinary modes keep an oversized paragraph intact. Protected-name mode
+splits oversized source paragraphs only at sentence boundaries, keeps stable
+child IDs, and reassembles the accepted translations in source order; a
+sentence that cannot fit stops with its unit ID before extraction.
 
 ## Requests and recovery
 
@@ -50,13 +52,19 @@ Retries after an untranslated reply include an instruction to return only the
 target-language translations while preserving the required output structure.
 The smaller groups inherit this instruction; it does not affect later chunks.
 
-The default protected-name workflow does not use those whole-chunk retries or
-splits. It keeps every valid paragraph from the initial response, then sends one
-request for all outstanding failed paragraphs together with their errors and
-read-only neighbouring source context. `--max-chunk-attempts` is the per-
-paragraph send budget, and `--retry-one-by-one` is accepted but has no effect.
-See [Protected-name workflow](protected-names.md) for marker grounding and
-resume details.
+The default protected-name workflow extracts names once from each complete
+8,192-token original-source window, inserts longest matches locally, then
+translates bounded chunks with the preceding cumulative source-language
+summary. It strictly checks that each prepared marker remains exactly once in
+its original unit. After every unit in a window is accepted, a separate request
+updates the cumulative summary from original source. The final partial window
+is summarized too. `--name-window-tokens` and `--source-summary-tokens` control
+the source stages; `--request-max-units` and `--request-max-tokens` still bound
+translation chunks. A failure message identifies the stage, window, unit IDs,
+attempts, and saved progress. Resume reuses committed extraction and retries
+only unfinished translation or summary work. See
+[Protected-name workflow](protected-names.md) for catalogue, validation, and
+recovery details.
 
 ## Glossary and style
 

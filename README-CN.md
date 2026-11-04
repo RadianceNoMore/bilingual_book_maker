@@ -2,8 +2,9 @@
 
 # Bilingual Book Maker
 
-此本地分支新增 `--protected-names`：模型在译文中用 `${原文专名}` 标记人名与术语，脚本验证后写入嵌入式目录，并用共享 CSS 显示可编辑的译名。
-`--glossary-window-tokens` 仅作为滚动上下文压缩预算的兼容别名（默认 8192）；`--context-compact-at` 优先。PowerShell 启动器默认启用该流程。
+此本地分支新增 `--protected-names`：每个原文窗口先提取专名，再由脚本插入 `${原文专名}`，分块翻译后更新累计原文摘要。
+`--name-window-tokens` 控制提取窗口大小（默认 8192），`--source-summary-tokens` 控制累计摘要长度（默认 1500）。PowerShell 启动器默认启用该流程。
+`--glossary-window-tokens` 是旧的滚动上下文压缩别名，不能与 `--protected-names` 同时使用。
 只生成一个由 CSS 驱动的双语 EPUB，状态与目录内嵌其中，便于离线修改译名而无需重新翻译；详见 [工作流程](docs/protected-names.md)。
 
 **中文 | [English](./README.md)**

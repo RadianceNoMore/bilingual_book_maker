@@ -1,7 +1,7 @@
 # Window-first protected names and cumulative source-language context
 
-Status: implementation plan only, 2026-11-04. No translation behavior has been
-changed by this document.
+Status: implementation applied; focused validation passed; full-suite validation incomplete, 2026-11-04.
+The live-provider smoke run has not been performed.
 
 ## Fork and scope
 
@@ -12,9 +12,10 @@ untracked source files, and tracked deletions. The copied working state is
 recorded in baseline commit `c59ae8e`. The source repository was at commit
 `5988a17`; its local working changes are part of this baseline.
 
-Implement the workflow described here in this fork. Keep source books and the
-existing repository's recoveries intact. This plan does not run a translation
-or publish a GitHub fork; the source repository's `origin` is a local directory.
+The workflow described here is implemented in this fork. Source books and the
+existing repository's recoveries remain untouched. No live translation or
+GitHub publication has been performed; the source repository's `origin` is a
+local directory.
 
 ## Agreed behavior
 
@@ -376,3 +377,32 @@ tests; add focused window/extraction tests. Run the focused suite, then
 the repository already requires. A later live smoke run should inspect two real
 windows' stage order, original-language summaries, and marker preservation;
 record that evidence before declaring the implementation complete.
+
+## Implementation and validation record
+
+The fork now implements the window-first workflow above. Each original-language
+window is extracted once before translation; validated labels are added to the
+persistent name catalogue before chunk calls, and local insertion selects
+longest overlapping labels first. Chunks receive the validated cumulative
+source-language summary from earlier windows. After all chunks in a window are
+accepted, a separate summary request updates the cumulative summary for the next
+window. Resume state preserves prepared windows, catalogue provenance, accepted
+chunks, and summary progress. The launchers print the stage and configured
+budgets; the Python workflow reports window/chunk IDs, retry details, checkpoint
+state, and actionable failures.
+
+Validation completed on 2026-11-04:
+
+- `python -m pytest tests/test_cli_documentation.py tests/test_source_windows.py tests/test_marker_bundle.py tests/test_marker_end_to_end.py -q` — **26 passed**.
+- `python -m compileall -q book_maker` — passed.
+- PowerShell parser checks for the root and canonical launchers — passed.
+- `git diff --check` — no whitespace errors; Git reported only existing LF/CRLF
+  normalization warnings.
+- `python -m pytest -q` did not complete. It reached 23%, then showed no visible
+  percentage progress for over three minutes while subprocess-heavy failures
+  accumulated. It was stopped with Ctrl+C; pytest produced no final summary, so
+  this is not a passing full-suite result. A separate earlier CLI subset also
+  exposed offline-fixture and Windows encoding failures in ordinary translation
+  tests; the later focused protected-name suite above passed.
+- No live Gemini/provider smoke call was made. The focused tests use captured
+  fake provider responses and do not establish live model behavior.

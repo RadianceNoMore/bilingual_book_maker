@@ -24,7 +24,9 @@ param(
     [switch]$TranslateFilename = $true,
     [switch]$ProtectedNames = $true,
     [ValidateRange(1, 1000000)]
-    [int]$GlossaryWindowTokens = 8192
+    [int]$NameWindowTokens = 8192,
+    [ValidateRange(1, 1000000)]
+    [int]$SourceSummaryTokens = 1500
 )
 
 $ErrorActionPreference = 'Stop'

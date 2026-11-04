@@ -324,6 +324,8 @@ class EPUBBookLoader(BaseBookLoader):
         translation_metadata=False,
         language_tag=None,
         protected_names=False,
+        name_window_tokens=8192,
+        source_summary_tokens=1500,
     ):
         # Before the translator is built and before a byte of the book is
         # read: a protected book is refused, and there is no flag that opens
@@ -337,6 +339,9 @@ class EPUBBookLoader(BaseBookLoader):
         self.language = language
         self.source_lang = source_lang
         self.protected_names = bool(protected_names)
+        self.name_window_tokens = int(name_window_tokens)
+        self.source_summary_tokens = int(source_summary_tokens)
+        self._active_source_window_stage = None
         self._marker_state = None
         self._resume_bundle_path = None
         self.strip_obfuscated_codes = True
@@ -1406,11 +1411,14 @@ class EPUBBookLoader(BaseBookLoader):
                 json.dumps(
                     {
                         "language": self.language,
+                        "source_language": getattr(self, "source_lang", None),
                         "prompt": self._resolved_prompt(),
                         "model": self._configured_models(),
                         "glossary": self._pinned_glossary_lines(),
-                        **({"protected_names": "source-markers-css-v1",
-                            "glossary_window_tokens": getattr(self, 'glossary_window_tokens', 8192),
+                        **({"protected_names": "source-window-markers-css-v2",
+                            "name_window_tokens": getattr(self, "name_window_tokens", 8192),
+                            "source_summary_tokens": getattr(self, "source_summary_tokens", 1500),
+                            "cross_chapters": bool(getattr(self, "accumulate_across_chapters", False)),
                             "marker_settings": {
                                 "request_max_units": getattr(self, "request_max_units", DEFAULT_REQUEST_MAX_UNITS),
                                 "request_max_tokens": getattr(self, "request_max_tokens", DEFAULT_REQUEST_MAX_TOKENS),
@@ -4408,6 +4416,400 @@ class EPUBBookLoader(BaseBookLoader):
             if plan.jobs:
                 plan.item.content = plan.soup.encode("utf-8")
 
+    def _process_source_window_stream(self, chapter_plans, pbar):
+        """Run extraction, prepared translation chunks, and source summary in order."""
+        from book_maker.marker_workflow import (
+            MarkerValidationError,
+            assemble_marker_request,
+            paragraph_request,
+        )
+        from book_maker.source_windows import (
+            SourceWindowError,
+            join_fragments,
+            plan_source_windows,
+        )
+        from types import SimpleNamespace
+
+        workflow = self._marker_state
+        jobs = [job for plan in chapter_plans for job in plan.jobs]
+        if not jobs:
+            return
+        name_budget = int(getattr(self, "name_window_tokens", 8192))
+        summary_budget = int(getattr(self, "source_summary_tokens", 1500))
+        request_tokens = int(getattr(self, "request_max_tokens", DEFAULT_REQUEST_MAX_TOKENS))
+        request_units = int(getattr(self, "request_max_units", DEFAULT_REQUEST_MAX_UNITS))
+        if name_budget < 1 or summary_budget < 1:
+            raise ValueError(
+                "Protected-name source budgets must be positive: "
+                f"--name-window-tokens={name_budget}, "
+                f"--source-summary-tokens={summary_budget}."
+            )
+
+        window_source_by_job = {}
+        source_jobs = []
+        for job in jobs:
+            source = job.source_text
+            if getattr(self, "strip_obfuscated_codes", True):
+                source = strip_codes(source)
+            window_source_by_job[job.job_id] = source
+            source_jobs.append(
+                SimpleNamespace(
+                    job_id=job.job_id,
+                    source_text=job.source_text,
+                    window_source=source,
+                    global_index=job.global_index,
+                    context_group=job.context_group,
+                )
+            )
+        cross_chapters = bool(self.accumulate_across_chapters)
+        try:
+            windows = plan_source_windows(
+                source_jobs,
+                name_budget,
+                num_tokens_from_text,
+                cross_chapters=cross_chapters,
+                max_unit_tokens=request_tokens,
+            )
+        except SourceWindowError as error:
+            detail = f"Protected-name source-window planning failed before any provider request: {error}"
+            print(f"[bold red]{detail}[/bold red]")
+            raise MarkerValidationError(detail) from error
+        plan_fingerprint = workflow.register_source_window_plan(
+            windows,
+            name_budget=name_budget,
+            summary_budget=summary_budget,
+            run_fingerprint=self._run_fingerprint(),
+            cross_chapters=cross_chapters,
+        )
+        self._save_progress()
+        source_language = (
+            getattr(self.translate_model, "source_language", None)
+            or getattr(self, "source_lang", None)
+        )
+        print(
+            f"Protected names: source plan frozen as {len(windows)} window(s), "
+            f"{sum(len(window.units) for window in windows)} unit/fragment(s), "
+            f"window budget {name_budget}, chunk budget {request_tokens}, "
+            f"summary budget {summary_budget} estimated tokens. "
+            f"Plan fingerprint: {plan_fingerprint}."
+        )
+
+        provider_limit = next(
+            (
+                getattr(self.translate_model, name)
+                for name in ("max_input_tokens", "context_window_tokens", "context_length")
+                if isinstance(getattr(self.translate_model, name, None), int)
+                and getattr(self.translate_model, name) > 0
+            ),
+            None,
+        )
+        job_by_id = {job.job_id: job for job in jobs}
+        units_by_parent = {}
+        for window in windows:
+            for unit in window.units:
+                units_by_parent.setdefault(unit.parent_identity, []).append(unit)
+        self._source_window_units_by_parent = units_by_parent
+        rendered = set()
+
+        def render_ready_parents():
+            translations_by_unit = {}
+            for saved_window in workflow.source_windows_state.get("windows", []):
+                for saved_unit in saved_window.get("units", []):
+                    translated = saved_unit.get("translation")
+                    if isinstance(translated, str):
+                        translations_by_unit[saved_unit.get("unit_id")] = translated
+            for job in jobs:
+                if job.job_id in rendered:
+                    continue
+                if job.global_index < len(self.p_to_save):
+                    value = self.p_to_save[job.global_index]
+                else:
+                    fragments = sorted(
+                        units_by_parent.get(job.job_id, []),
+                        key=lambda unit: unit.fragment_index,
+                    )
+                    if not fragments:
+                        continue
+                    if any(unit.identity not in translations_by_unit for unit in fragments):
+                        continue
+                    target_code = language_code(self.language)
+                    no_space_languages = {"zh", "yue", "wuu", "ja", "ko", "th", "lo", "km", "my"}
+                    values = join_fragments(
+                        fragments,
+                        [translations_by_unit[unit.identity] for unit in fragments],
+                        default_separator=(
+                            "" if target_code in no_space_languages else " "
+                        ),
+                    )
+                    value = values[job.job_id]
+                    self._record_translation_result(job.global_index, value)
+                    if job.global_index >= len(self.p_to_save):
+                        continue
+                    value = self.p_to_save[job.global_index]
+                if job.unit is not None:
+                    self._insert_plan_translation(
+                        job.unit, value, self.translation_style, self.single_translate
+                    )
+                else:
+                    self._insert_trans_preserving_tags(
+                        job.node, value, self.translation_style, self.single_translate
+                    )
+                rendered.add(job.job_id)
+                pbar.update(1)
+
+        # Empty post-cleanup nodes do not belong to extraction, but they retain
+        # their document-order checkpoint slots and are resolved locally.
+        for job in jobs:
+            if not (window_source_by_job[job.job_id] or "").strip():
+                self._record_translation_result(job.global_index, "")
+        render_ready_parents()
+
+        for window_index, window in enumerate(windows, 1):
+            record = workflow.prepared_window(window)
+            if record is None:
+                from book_maker.source_windows import (
+                    EXTRACTION_OUTPUT_TOKENS,
+                    source_window_prompt as make_prompt,
+                )
+
+                extraction_input = make_prompt(
+                    window,
+                    workflow.source_summary,
+                    source_language,
+                )
+                self._check_source_window_input(
+                    "name extraction",
+                    extraction_input,
+                    output_allowance=EXTRACTION_OUTPUT_TOKENS,
+                    provider_limit=provider_limit,
+                    window_id=window.identity,
+                )
+            self._active_source_window_stage = ("name extraction", window.identity)
+            record, prepared, spans = workflow.prepare_source_window(
+                window,
+                persist=self._save_progress,
+                source_language=source_language,
+            )
+            self._active_source_window_stage = None
+            incoming_summary = record.get("incoming_summary") or ""
+            print(
+                f"Protected names: window {window_index}/{len(windows)} "
+                f"{window.identity}: {len(window.units)} unit(s), "
+                f"{window.estimated_tokens} estimated source tokens; "
+                f"{len(record.get('extracted_names') or [])} labels committed."
+            )
+
+            rows_by_id = {row["unit_id"]: row for row in record.get("units", [])}
+            prepared_texts = [prepared[unit.identity] for unit in window.units]
+            slices = list(
+                request_slices(
+                    prepared_texts,
+                    request_units,
+                    request_tokens,
+                    num_tokens_from_text,
+                )
+            )
+            for chunk_number, part in enumerate(slices, 1):
+                chunk_units = [
+                    unit
+                    for unit in window.units[part]
+                    if record.get("status") != "complete"
+                    and not (
+                        unit.identity in set(record.get("accepted_unit_ids") or [])
+                        and isinstance(rows_by_id.get(unit.identity, {}).get("translation"), str)
+                    )
+                ]
+                if not chunk_units:
+                    continue
+                chunk_sources = [prepared[unit.identity] for unit in chunk_units]
+                chunk_cost = sum(num_tokens_from_text(text) for text in chunk_sources)
+                if chunk_cost > request_tokens:
+                    raise MarkerValidationError(
+                        f"Prepared translation chunk {window.identity}/{chunk_number} "
+                        f"is estimated at {chunk_cost} tokens after marker insertion, "
+                        f"over --request-max-tokens={request_tokens}. No translation "
+                        "request was sent for this chunk. Lower the name-window budget "
+                        "or request cap, or shorten the source unit."
+                    )
+                prefix_budget = max(0, min(1000, request_tokens - chunk_cost))
+                prefix_parts = []
+                prefix_tokens = 0
+                for prior_unit in reversed(window.units[:part.start]):
+                    size = num_tokens_from_text(prior_unit.source)
+                    if prefix_parts and prefix_tokens + size > prefix_budget:
+                        break
+                    if not prefix_budget or size > prefix_budget:
+                        break
+                    prefix_parts.append(prior_unit.source)
+                    prefix_tokens += size
+                prefix_parts.reverse()
+                context = {
+                    "summary": incoming_summary,
+                    "accepted_source_prefix": "\n".join(prefix_parts),
+                }
+                identities, payload = paragraph_request(
+                    chunk_sources, [unit.identity for unit in chunk_units]
+                )
+                request_text = assemble_marker_request(
+                    payload,
+                    language=self.language,
+                    premarked=True,
+                    context=context,
+                )
+                standing = getattr(self.translate_model, "standing_instructions", None)
+                system_text = standing() if callable(standing) else ""
+                self._check_source_window_input(
+                    "prepared translation",
+                    system_text + "\n" + request_text,
+                    output_allowance=max(512, chunk_cost),
+                    provider_limit=provider_limit,
+                    window_id=window.identity,
+                    unit_ids=identities,
+                )
+                print(
+                    f"Protected names: translating {window.identity} chunk "
+                    f"{chunk_number}/{len(slices)} ({len(chunk_units)} unit(s), "
+                    f"{chunk_cost} source tokens, {prefix_tokens} accepted-prefix "
+                    f"tokens, {num_tokens_from_text(incoming_summary)} summary tokens)."
+                )
+                try:
+                    self._active_source_window_stage = (
+                        "translation",
+                        window.identity,
+                        chunk_number,
+                        identities,
+                    )
+                    translations = workflow.translate(
+                        chunk_sources,
+                        lambda payload, feedback="", **kwargs: self.translate_model.translate_marker_units(
+                            payload, feedback, **kwargs
+                        ),
+                        workflow.validate_quality,
+                        identities=identities,
+                        persist=self._save_progress,
+                        premarked=True,
+                        context=context,
+                    )
+                except BaseException as error:
+                    recovered = {}
+                    for unit in chunk_units:
+                        accepted_master = workflow.recovery_master(
+                            unit.identity, prepared[unit.identity]
+                        )
+                        if isinstance(accepted_master, str):
+                            recovered[unit.identity] = accepted_master
+                    if recovered:
+                        workflow.mark_window_unit_accepted(
+                            window.identity, recovered
+                        )
+                        record["status"] = "translating"
+                        render_ready_parents()
+                    if not isinstance(error, Exception):
+                        print(
+                            f"[yellow]Protected names: {window.identity} chunk "
+                            f"{chunk_number}/{len(slices)} was interrupted. "
+                            f"Recovered {len(recovered)} accepted unit(s); the "
+                            "remaining window work is saved for resume.[/yellow]"
+                        )
+                        self._save_progress()
+                        raise
+                    pending_ids = [
+                        identity for identity in identities
+                        if identity not in recovered
+                    ]
+                    ids = ", ".join(pending_ids) or "none; all replies are journaled"
+                    detail = (
+                        f"Translation failed in {window.identity}, chunk "
+                        f"{chunk_number}/{len(slices)}, unit IDs [{ids}]: {error}. "
+                        + (
+                            f"Recovered accepted siblings: {', '.join(recovered)}. "
+                            if recovered else ""
+                        )
+                        + "Previously accepted units and the prepared name catalogue "
+                        "are checkpointed. Resume retries only failed units; the "
+                        "window will not be re-extracted."
+                    )
+                    workflow.record_failure("window-translation", "", detail)
+                    print(f"[bold red]Protected names: {detail}[/bold red]")
+                    self._active_source_window_stage = None
+                    self._save_progress()
+                    raise MarkerValidationError(detail) from error
+                self._active_source_window_stage = None
+                accepted = dict(zip(identities, translations))
+                workflow.mark_window_unit_accepted(window.identity, accepted)
+                record["status"] = "translating"
+                self._save_progress()
+                print(
+                    f"Protected names: accepted chunk {chunk_number}/{len(slices)} "
+                    f"for {window.identity}; {len(record.get('accepted_unit_ids') or [])}/"
+                    f"{len(window.units)} prepared units are durable."
+                )
+            # A resumed summary-pending window can have no translation chunks.
+            if record.get("status") != "complete":
+                saved_accepted = set(record.get("accepted_unit_ids") or [])
+                missing = [unit.identity for unit in window.units if unit.identity not in saved_accepted]
+                if missing:
+                    raise MarkerValidationError(
+                        f"Window {window.identity} cannot advance to summary: "
+                        f"{len(missing)} unit(s) are still pending: {', '.join(missing[:12])}."
+                    )
+                record["status"] = "summary_pending"
+                workflow.source_windows_state["summary_pending_window"] = window.identity
+                render_ready_parents()
+                self._save_progress()
+                from book_maker.source_windows import source_summary_prompt as make_summary_prompt
+
+                summary_prompt = make_summary_prompt(
+                    incoming_summary, window, source_language, summary_budget
+                )
+                self._check_source_window_input(
+                    "cumulative summary",
+                    summary_prompt,
+                    output_allowance=summary_budget,
+                    provider_limit=provider_limit,
+                    window_id=window.identity,
+                )
+                self._active_source_window_stage = ("cumulative source summary", window.identity)
+                workflow.summarize_source_window(
+                    window,
+                    persist=self._save_progress,
+                    source_language=source_language,
+                    budget=summary_budget,
+                )
+                self._active_source_window_stage = None
+            render_ready_parents()
+            self._save_progress()
+        for plan in chapter_plans:
+            if plan.jobs:
+                plan.item.content = plan.soup.encode("utf-8")
+
+    def _check_source_window_input(
+        self, stage, text, *, output_allowance, provider_limit, window_id, unit_ids=()
+    ):
+        estimate = num_tokens_from_text(text)
+        total = estimate + max(0, int(output_allowance))
+        if provider_limit is not None and total > provider_limit:
+            identities = ", ".join(unit_ids) or "all source units in the window"
+            message = (
+                f"Provider input preflight rejected {stage} for {window_id} "
+                f"({identities}): estimated request plus output is {total} tokens, "
+                f"but the configured provider limit is {provider_limit}. No request "
+                "was sent. Reduce --name-window-tokens, --request-max-tokens, or "
+                "--source-summary-tokens, then start a new run because the frozen "
+                "window plan includes those values."
+            )
+            print(f"[bold red]Protected names: {message}[/bold red]")
+            raise MarkerValidationError(message)
+        print(
+            f"Protected names: {stage} input preflight for {window_id}: "
+            f"{estimate} estimated input tokens + {max(0, int(output_allowance))} "
+            f"output allowance" + (
+                f" <= provider limit {provider_limit}."
+                if provider_limit is not None else "; the endpoint exposes no "
+                "input-limit metadata, so only estimated sizing is available."
+            )
+        )
+
     def _write_consistency_report(self, chapter_plans, name):
         """Audit accepted target slots, never the bilingual source copies."""
         from book_maker.translation_audit import write_audit
@@ -4442,6 +4844,12 @@ class EPUBBookLoader(BaseBookLoader):
             return source_name
         source = Path(source_name).name
         translated = self._cached_localization(f"filename:{source}", source)
+        marker = getattr(self.translate_model, "_marker_state", None)
+        if marker is not None and getattr(marker, "window_mode", False):
+            # Filename extraction is an auxiliary source group. Resolve any
+            # newly collected labels before deriving the visible file stem.
+            marker.flush_mappings()
+            translated = marker.display_text(translated)
         stem = safe_title_stem(translated)
         original = Path(self.output_path(f"{source_name}_bilingual.epub"))
         target = Path(self.output_path(str(Path(source_name).with_name(stem)) + "_bilingual.epub"))
@@ -4460,7 +4868,43 @@ class EPUBBookLoader(BaseBookLoader):
             marker = getattr(
                 getattr(self, "translate_model", None), "_marker_state", None
             )
-            if marker is not None:
+            if marker is not None and getattr(marker, "window_mode", False):
+                source_for_marking = (
+                    strip_codes(source)
+                    if getattr(self, "strip_obfuscated_codes", True)
+                    else source
+                )
+                prepared, auxiliary = marker.prepare_auxiliary_source(
+                    source_for_marking,
+                    cache_key,
+                    persist=self._save_progress,
+                    source_language=(
+                        getattr(self.translate_model, "source_language", None)
+                        or getattr(self, "source_lang", None)
+                    ),
+                )
+                existing_translation = auxiliary.get("translation")
+                if isinstance(existing_translation, str):
+                    value = existing_translation
+                else:
+                    value = marker.translate(
+                        [prepared],
+                        lambda payload, feedback="", **kwargs: self.translate_model.translate_marker_units(
+                            payload, feedback, **kwargs
+                        ),
+                        marker.validate_quality,
+                        identities=[cache_key],
+                        persist=self._save_progress,
+                        premarked=True,
+                        context={
+                            "summary": auxiliary.get("incoming_summary") or "",
+                            "accepted_source_prefix": "",
+                        },
+                    )[0]
+                    auxiliary["translation"] = value
+                    auxiliary["status"] = "complete"
+                    self._save_progress()
+            elif marker is not None:
                 value = self._translate_texts_aligned(
                     [source], identities=[cache_key]
                 )[0]
@@ -4635,6 +5079,49 @@ class EPUBBookLoader(BaseBookLoader):
 
     def _marker_recovery_value(self, job):
         workflow = getattr(self, "_marker_state", None)
+        if workflow is not None and getattr(workflow, "window_mode", False):
+            source_units = getattr(self, "_source_window_units_by_parent", {}).get(
+                getattr(job, "job_id", None), []
+            )
+            saved_units = {}
+            for window_record in workflow.source_windows_state.get("windows", []):
+                for unit_record in window_record.get("units", []):
+                    saved_units[unit_record.get("unit_id")] = unit_record
+            if source_units:
+                translations = [
+                    saved_units.get(unit.identity, {}).get("translation")
+                    for unit in sorted(
+                        source_units, key=lambda unit: unit.fragment_index
+                    )
+                ]
+                if all(isinstance(value, str) for value in translations):
+                    if len(source_units) == 1:
+                        return translations[0]
+                    from book_maker.source_windows import join_fragments
+
+                    target_code = language_code(self.language)
+                    no_space_languages = {
+                        "zh", "yue", "wuu", "ja", "ko", "th", "lo", "km", "my"
+                    }
+                    return join_fragments(
+                        sorted(source_units, key=lambda unit: unit.fragment_index),
+                        translations,
+                        default_separator=(
+                            "" if target_code in no_space_languages else " "
+                        ),
+                    ).get(job.job_id)
+            else:
+                # Recovery rendering can run before the source window plan is
+                # rebuilt. A single unfragmented prepared unit is still
+                # independently identifiable by its parent job ID.
+                matches = [
+                    row
+                    for row in saved_units.values()
+                    if row.get("parent_job_id") == getattr(job, "job_id", None)
+                ]
+                if len(matches) == 1 and isinstance(matches[0].get("translation"), str):
+                    return matches[0]["translation"]
+            return None
         lookup = getattr(workflow, "recovery_master", None)
         if not callable(lookup) or job is None:
             return None
@@ -4896,6 +5383,7 @@ class EPUBBookLoader(BaseBookLoader):
     def _marker_settings(self):
         """Safe settings recorded in the embedded run manifest."""
         return {
+            "workflow": "source-window-markers-css-v2",
             "run_fingerprint": self._run_fingerprint(),
             "language": self.language,
             "source_language": getattr(self, "source_lang", None),
@@ -4907,7 +5395,11 @@ class EPUBBookLoader(BaseBookLoader):
             "accumulate_across_chapters": bool(getattr(self, "accumulate_across_chapters", False)),
             "single_translate": bool(getattr(self, "single_translate", False)),
             "translate_filename": bool(getattr(self, "translate_filename", False)),
-            "compact_budget": getattr(self, "glossary_window_tokens", 8192),
+            "name_window_tokens": getattr(self, "name_window_tokens", 8192),
+            "source_summary_tokens": getattr(self, "source_summary_tokens", 1500),
+            "name_extraction_prompt_version": 2,
+            "source_summary_prompt_version": 1,
+            "marker_preservation_prompt_version": 2,
             "strip_obfuscated_codes": bool(getattr(self, "strip_obfuscated_codes", True)),
         }
 
@@ -5342,6 +5834,11 @@ class EPUBBookLoader(BaseBookLoader):
             self._remove_alternate_marker_recovery()
 
     def make_bilingual_book(self):
+        from book_maker.marker_workflow import (
+            ContextRepairPending,
+            MarkerValidationError,
+        )
+
         requested_protected = bool(
             getattr(self, "protected_names", False)
             or getattr(self.translate_model, "protected_names", False)
@@ -5351,8 +5848,6 @@ class EPUBBookLoader(BaseBookLoader):
             requested_protected
             and callable(getattr(self.translate_model, "translate_marker_units", None))
         )
-        if marker_mode:
-            from book_maker.marker_workflow import ContextRepairPending
         if requested_protected and not marker_mode:
             # Test doubles and older custom routes may still expose the v2
             # preparation/review hooks. They keep the old implementation; the
@@ -5376,14 +5871,19 @@ class EPUBBookLoader(BaseBookLoader):
                     "--protected-names requires an OpenAI-compatible route "
                     "that supports independent display-mapping requests"
                 )
+            for hook in ("extract_window_names", "summarize_source_window"):
+                if not callable(getattr(self.translate_model, hook, None)):
+                    raise ValueError(
+                        "--protected-names requires an OpenAI-compatible route "
+                        f"with the independent {hook} stage. The selected route "
+                        "cannot run the source-window workflow."
+                    )
             if not self._begin_marker_run():
                 return
-            # The launcher's legacy alias is a compact-budget override only in
-            # this mode. An explicit --context-compact-at still wins.
-            if getattr(self.translate_model, "context_compact_at", None) is None:
-                self.translate_model.context_compact_at = getattr(
-                    self, "glossary_window_tokens", 8192
-                )
+            # Source-window mode supplies a frozen original-language summary
+            # explicitly to each provider call; session history and automatic
+            # marker compaction are not part of its context contract.
+            self.translate_model.context_flag = False
         elif legacy_protected:
             from book_maker.protected_names import ProtectedNames
 
@@ -5474,7 +5974,14 @@ class EPUBBookLoader(BaseBookLoader):
         # Before plan mode, not behind it: the budget is pinned for grouped
         # and ungrouped session runs alike, so a run that never enters plan
         # mode (or falls back out of it) is owed the same line.
-        self._narrate_session_compact_budget()
+        if marker_mode:
+            print(
+                "Protected names: token-triggered session compaction is disabled; "
+                f"cumulative source summaries update after each complete "
+                f"{self.name_window_tokens}-token name window."
+            )
+        else:
+            self._narrate_session_compact_budget()
 
         if self._plan_mode:
             self._enter_plan_mode()
@@ -5611,7 +6118,10 @@ class EPUBBookLoader(BaseBookLoader):
                 and not self.is_test
                 and (not self.enable_parallel or len(output_plans) <= 1)
             ):
-                self._process_accumulated_stream(chapter_plans, pbar)
+                if marker_mode and getattr(self._marker_state, "window_mode", False):
+                    self._process_source_window_stream(chapter_plans, pbar)
+                else:
+                    self._process_accumulated_stream(chapter_plans, pbar)
                 for plan in output_plans:
                     new_book.add_item(plan.item)
                 pbar.close()
@@ -5829,8 +6339,21 @@ class EPUBBookLoader(BaseBookLoader):
                 except Exception:
                     pass
         except KeyboardInterrupt as e:
-            print(e)
-            print("you can resume it next time")
+            active_stage = getattr(self, "_active_source_window_stage", None)
+            if marker_mode and active_stage:
+                stage, window_id, *details = active_stage
+                suffix = ""
+                if details:
+                    suffix = ", details " + ", ".join(map(str, details))
+                print(
+                    f"Protected-name workflow interrupted during {stage} for "
+                    f"{window_id}{suffix}. The provider may have received this "
+                    "request. Accepted work is saved; resume repeats only the "
+                    "uncommitted stage."
+                )
+            else:
+                print(e)
+                print("you can resume it next time")
             try:
                 self._save_progress()
             except Exception:
@@ -5871,6 +6394,11 @@ class EPUBBookLoader(BaseBookLoader):
             error_msg = str(e)
             if getattr(e, "user_facing", False):
                 print(f"[bold red]{escape(error_msg)}[/bold red]")
+            elif marker_mode and isinstance(e, MarkerValidationError):
+                print(
+                    "[bold red]Protected-name workflow stopped: "
+                    f"{escape(error_msg)}[/bold red]"
+                )
             elif "Connection" in error_msg or "connection" in error_msg:
                 print(
                     f"[bold red]Translation failed: Connection error - {error_msg}[/bold red]"

@@ -1999,11 +1999,19 @@ off. Minimum 1.
     )
     parser.add_argument(
         "--protected-names", action="store_true",
-        help="EPUB: preserve model-selected source names as ${exact label} markers and generate one CSS-driven bilingual EPUB with embedded editable mappings; failed paragraphs are repaired together without retranslating accepted neighbours",
+        help="EPUB: extract exact names once per source window, insert ${exact label} markers locally, translate with cumulative original-language context, and generate a CSS-driven bilingual EPUB",
     )
     parser.add_argument(
-        "--glossary-window-tokens", type=batch_unit_cap, default=8192,
-        help="deprecated alias for the rolling context-compaction budget in protected-name mode (default: 8192)",
+        "--name-window-tokens", type=batch_unit_cap, default=8192,
+        help="protected-name mode: maximum estimated original-source tokens inspected for name extraction in one window (default: 8192)",
+    )
+    parser.add_argument(
+        "--source-summary-tokens", type=batch_unit_cap, default=1500,
+        help="protected-name mode: maximum estimated tokens in the cumulative original-language story summary (default: 1500)",
+    )
+    parser.add_argument(
+        "--glossary-window-tokens", type=batch_unit_cap, default=None,
+        help="legacy alias for the rolling session compaction budget; rejected with --protected-names, which uses --name-window-tokens",
     )
     parser.add_argument(
         "--strip-obfuscated-codes", choices=("on", "off"), default="on",
@@ -2530,6 +2538,22 @@ def main():
     if options.protected_names:
         if book_type != 'epub' or api_format not in LLM_FORMATS:
             raise SystemExit('--protected-names requires an EPUB and an LLM API route')
+        if options.glossary_window_tokens is not None:
+            raise SystemExit(
+                "--glossary-window-tokens is ambiguous in source-window protected-name "
+                "mode; use --name-window-tokens for extraction windows"
+            )
+        if options.context_compact_at is not None or options.no_context_compact:
+            conflicts = []
+            if options.context_compact_at is not None:
+                conflicts.append("--context-compact-at")
+            if options.no_context_compact:
+                conflicts.append("--no-context-compact")
+            raise SystemExit(
+                f"{' and '.join(conflicts)} do not apply with --protected-names; "
+                "the workflow updates its original-language summary once after "
+                "each completed source window"
+            )
         if (options.parallel_workers > 1 or options.sentence_mode or options.batch_flag
                 or options.batch_use_flag or options.retranslate):
             raise SystemExit('--protected-names requires sequential grouped translation without sentence, batch-job, or retranslate modes; --retry-one-by-one is accepted but marker mode always repairs outstanding paragraphs together')
@@ -2665,6 +2689,8 @@ def main():
         loader_kwargs["language_tag"] = target.tag
         loader_kwargs["disclose"] = options.disclosure
         loader_kwargs["translation_metadata"] = options.translation_metadata
+        loader_kwargs["name_window_tokens"] = options.name_window_tokens
+        loader_kwargs["source_summary_tokens"] = options.source_summary_tokens
         # Known before the loader can consult a legacy checkpoint. The
         # marker workflow must not let load_state consume an old pickle.
         loader_kwargs["protected_names"] = options.protected_names
@@ -2904,7 +2930,11 @@ def main():
     if book_type == "epub":
         e.strip_obfuscated_codes = options.strip_obfuscated_codes == "on"
         e.translate_model.protected_names = options.protected_names
-        e.glossary_window_tokens = options.glossary_window_tokens
+        e.glossary_window_tokens = (
+            options.glossary_window_tokens or DEFAULT_COMPACT_BUDGET
+        )
+        e.name_window_tokens = options.name_window_tokens
+        e.source_summary_tokens = options.source_summary_tokens
         e.accumulate_across_chapters = options.accumulate_across_chapters
         e.translate_metadata = not options.no_translate_metadata
         e.translate_filename = options.translate_filename

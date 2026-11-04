@@ -17,6 +17,7 @@ from collections import Counter
 
 MARKER = re.compile(r"\$\{([^{}\r\n]+)\}")
 WORKFLOW = "source-markers-css-v1"
+WINDOW_WORKFLOW = "source-window-markers-css-v2"
 
 
 class MarkerError(ValueError):

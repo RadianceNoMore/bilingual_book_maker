@@ -16,6 +16,7 @@ import posixpath
 import re
 import shutil
 import tempfile
+from collections import Counter
 from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
@@ -27,16 +28,20 @@ from book_maker.marker_names import (
     MARKER,
     MarkerError,
     WORKFLOW,
+    WINDOW_WORKFLOW,
     display_text,
     marker_key,
+    markers,
     marker_parts,
     validate_display_target,
+    validate_summary,
 )
 
 
 STATE_PATH = "META-INF/bbm-marker-state.json"
 CSS_NAME = "bbm-names.css"
 SCHEMA_VERSION = 1
+WINDOW_SCHEMA_VERSION = 2
 LOCALIZATION_VERSION = 3
 LEGACY_LOCALIZATION_VERSION = 2
 CONTAINER_PATH = "META-INF/container.xml"
@@ -149,12 +154,16 @@ def validate_state(state):
     """Validate the schema, types, and catalogue keys of marker state."""
     if not isinstance(state, dict):
         raise BundleError("Marker state must be a JSON object")
-    if state.get("schema_version") != SCHEMA_VERSION:
+    workflow = state.get("workflow")
+    expected_schema = (
+        WINDOW_SCHEMA_VERSION if workflow == WINDOW_WORKFLOW else SCHEMA_VERSION
+    )
+    if workflow not in (WORKFLOW, WINDOW_WORKFLOW):
+        raise BundleError(f"Unsupported marker workflow {workflow!r}")
+    if state.get("schema_version") != expected_schema:
         raise BundleError(
             f"Unsupported marker state schema {state.get('schema_version')!r}"
         )
-    if state.get("workflow") != WORKFLOW:
-        raise BundleError(f"Unsupported marker workflow {state.get('workflow')!r}")
     run = state.get("run")
     if not isinstance(run, dict) or not isinstance(run.get("source_sha256"), str):
         raise BundleError("Marker state is missing its source fingerprint")
@@ -192,6 +201,202 @@ def validate_state(state):
                 ) from error
         if not isinstance(entry.get("count"), int) or entry["count"] < 0:
             raise BundleError(f"Catalogue count is invalid for {label!r}")
+        if workflow == WINDOW_WORKFLOW:
+            extracted = entry.get("extracted_from", [])
+            if not isinstance(extracted, list):
+                raise BundleError(
+                    f"Catalogue extraction provenance is invalid for {label!r}"
+                )
+            for provenance in extracted:
+                if not isinstance(provenance, dict):
+                    raise BundleError(
+                        f"Catalogue extraction provenance is malformed for {label!r}"
+                    )
+                if not isinstance(provenance.get("window_id"), str) or not isinstance(
+                    provenance.get("unit_ids"), list
+                ) or not isinstance(provenance.get("occurrences"), list):
+                    raise BundleError(
+                        f"Catalogue extraction provenance is incomplete for {label!r}"
+                    )
+    if workflow == WINDOW_WORKFLOW:
+        windows = state.get("source_windows")
+        if not isinstance(windows, dict) or windows.get("schema_version") != 1:
+            raise BundleError("Source-window recovery state is missing or unsupported")
+        if not isinstance(windows.get("name_window_tokens"), int) or windows["name_window_tokens"] < 1:
+            raise BundleError("Source-window name budget is malformed")
+        if not isinstance(windows.get("source_summary_tokens"), int) or windows["source_summary_tokens"] < 1:
+            raise BundleError("Source-window summary budget is malformed")
+        if not isinstance(windows.get("current_summary", ""), str):
+            raise BundleError("Source-window cumulative summary is malformed")
+        try:
+            validate_summary(
+                windows.get("current_summary", ""),
+                catalogue.keys(),
+            ) if windows.get("current_summary") else None
+        except MarkerError as error:
+            raise BundleError(
+                f"Source-window cumulative summary is invalid: {error}"
+            ) from error
+        plan = windows.get("plan", [])
+        records = windows.get("windows", [])
+        auxiliary = windows.get("auxiliary", [])
+        if not isinstance(plan, list) or not isinstance(records, list) or not isinstance(auxiliary, list):
+            raise BundleError("Source-window plan or records are malformed")
+        plan_ids = set()
+        plan_by_id = {}
+        for row in plan:
+            if not isinstance(row, dict) or not isinstance(row.get("window_id"), str):
+                raise BundleError("Source-window plan row is malformed")
+            if row["window_id"] in plan_ids:
+                raise BundleError("Source-window plan has duplicate window IDs")
+            plan_ids.add(row["window_id"])
+            unit_ids = row.get("unit_ids")
+            source_digest = row.get("source_sha256")
+            if (
+                not isinstance(unit_ids, list)
+                or any(not isinstance(identity, str) or not identity for identity in unit_ids)
+                or len(unit_ids) != len(set(unit_ids))
+                or not isinstance(source_digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", source_digest)
+            ):
+                raise BundleError("Source-window plan row has no source coverage")
+            plan_by_id[row["window_id"]] = row
+        record_ids = set()
+        for record in records:
+            if not isinstance(record, dict) or record.get("window_id") not in plan_ids:
+                raise BundleError("Prepared source-window record is not in the frozen plan")
+            if record["window_id"] in record_ids:
+                raise BundleError("Source-window records contain a duplicate window")
+            record_ids.add(record["window_id"])
+            if record.get("status") not in ("prepared", "translating", "summary_pending", "complete"):
+                raise BundleError("Source-window status is invalid")
+            if not isinstance(record.get("source_sha256"), str) or not isinstance(record.get("units"), list):
+                raise BundleError("Source-window record has no source membership")
+            if not re.fullmatch(r"[0-9a-f]{64}", record["source_sha256"]):
+                raise BundleError("Source-window source digest is malformed")
+            plan_row = plan_by_id[record["window_id"]]
+            if (
+                record["source_sha256"] != plan_row["source_sha256"]
+                or [unit.get("unit_id") for unit in record["units"] if isinstance(unit, dict)]
+                != plan_row["unit_ids"]
+            ):
+                raise BundleError(
+                    "Prepared source-window membership differs from its frozen plan"
+                )
+            if not isinstance(record.get("extraction_request_sha256"), str) or not re.fullmatch(
+                r"[0-9a-f]{64}", record["extraction_request_sha256"]
+            ):
+                raise BundleError("Source-window extraction request fingerprint is malformed")
+            incoming = record.get("incoming_summary")
+            if (
+                not isinstance(incoming, str)
+                or record.get("incoming_summary_sha256")
+                != sha256(incoming.encode("utf-8")).hexdigest()
+            ):
+                raise BundleError("Source-window incoming summary digest is malformed")
+            extracted_names = record.get("extracted_names")
+            if not isinstance(extracted_names, list) or any(
+                not isinstance(label, str) or not label for label in extracted_names
+            ):
+                raise BundleError("Source-window extracted name collection is malformed")
+            unit_ids = set()
+            for unit in record["units"]:
+                if not isinstance(unit, dict) or not isinstance(unit.get("unit_id"), str):
+                    raise BundleError("Prepared source-window unit is malformed")
+                if unit["unit_id"] in unit_ids:
+                    raise BundleError("Prepared source-window unit ID is duplicated")
+                unit_ids.add(unit["unit_id"])
+                if not isinstance(unit.get("prepared"), str) or not isinstance(unit.get("spans"), list):
+                    raise BundleError("Prepared source-window unit has no bracket record")
+                if not isinstance(unit.get("source_sha256"), str) or not re.fullmatch(
+                    r"[0-9a-f]{64}", unit["source_sha256"]
+                ):
+                    raise BundleError("Prepared source-window unit source digest is malformed")
+                try:
+                    expected_markers = Counter(markers(unit["prepared"]))
+                    marker_rows = unit.get("expected_markers")
+                    if not isinstance(marker_rows, list) or any(
+                        not isinstance(label, str) or not label for label in marker_rows
+                    ):
+                        raise TypeError("expected marker list is malformed")
+                    saved_markers = Counter(marker_rows)
+                except (MarkerError, TypeError) as error:
+                    raise BundleError(
+                        "Prepared source-window markers are malformed"
+                    ) from error
+                if expected_markers != saved_markers:
+                    raise BundleError(
+                        "Prepared source-window expected markers do not match its text"
+                    )
+                if "translation" in unit and not isinstance(unit["translation"], str):
+                    raise BundleError("Accepted source-window translation is not text")
+                if isinstance(unit.get("translation"), str):
+                    try:
+                        actual_markers = Counter(markers(unit["translation"]))
+                    except MarkerError as error:
+                        raise BundleError(
+                            "Accepted source-window translation has malformed markers"
+                        ) from error
+                    if actual_markers != saved_markers:
+                        raise BundleError(
+                            "Accepted source-window translation does not preserve its "
+                            "prepared marker multiset"
+                        )
+                if not isinstance(unit.get("accepted"), bool):
+                    raise BundleError("Source-window accepted marker is malformed")
+                if unit["accepted"] != isinstance(unit.get("translation"), str):
+                    raise BundleError(
+                        "Source-window accepted flag and translation disagree"
+                    )
+            accepted = record.get("accepted_unit_ids", [])
+            if (
+                not isinstance(accepted, list)
+                or any(
+                    not isinstance(identity, str) or identity not in unit_ids
+                    for identity in accepted
+                )
+                or len(accepted) != len(set(accepted))
+                or set(accepted)
+                != {
+                    unit["unit_id"]
+                    for unit in record["units"]
+                    if unit.get("accepted") is True
+                }
+            ):
+                raise BundleError("Source-window accepted unit progress is malformed")
+            if record.get("status") == "complete":
+                if set(accepted) != unit_ids:
+                    raise BundleError("Completed source window still has unaccepted units")
+                if not isinstance(record.get("outgoing_summary"), str) or not record["outgoing_summary"]:
+                    raise BundleError("Completed source window has no validated summary")
+                if not isinstance(record.get("summary_validation"), dict):
+                    raise BundleError("Completed source window has no summary validation metadata")
+                validation = record["summary_validation"]
+                if (
+                    validation.get("version") != 1
+                    or not isinstance(validation.get("language"), str)
+                    or not isinstance(validation.get("budget_tokens"), int)
+                    or not isinstance(validation.get("estimated_tokens"), int)
+                    or validation["estimated_tokens"] > validation["budget_tokens"]
+                    or not isinstance(validation.get("input_sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", validation["input_sha256"])
+                    or not isinstance(validation.get("request_sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", validation["request_sha256"])
+                ):
+                    raise BundleError("Completed source-window summary metadata is malformed")
+                try:
+                    validate_summary(record["outgoing_summary"], catalogue.keys())
+                except MarkerError as error:
+                    raise BundleError(
+                        f"Completed source-window summary is invalid: {error}"
+                    ) from error
+        for row in auxiliary:
+            if not isinstance(row, dict) or not isinstance(row.get("identity"), str):
+                raise BundleError("Auxiliary source extraction record is malformed")
+            if not isinstance(row.get("source_sha256"), str) or not isinstance(row.get("prepared"), str):
+                raise BundleError("Auxiliary source extraction has no source identity")
+            if "translation" in row and not isinstance(row["translation"], str):
+                raise BundleError("Auxiliary source translation is not text")
     session = state.get("session", {})
     if not isinstance(session, dict):
         raise BundleError("Marker session state is not an object")
