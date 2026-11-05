@@ -915,7 +915,12 @@ def test_real_adapter_truncation_journals_then_resumes_without_resending(tmp_pat
     ]
     first_ids = [unit[0] for unit in TruncatingAdapterModel.sent_requests[0]]
     assert len(first_ids) == 2
-    assert state["checkpoint"]["accepted_job_ids"] == [first_ids[0]]
+    assert first_ids == ["u001", "u002"]
+    unit_ids = [
+        unit["unit_id"]
+        for unit in state["source_windows"]["windows"][0]["units"]
+    ]
+    assert state["checkpoint"]["accepted_job_ids"] == [unit_ids[0]]
     with zipfile.ZipFile(recovery) as archive:
         first_chapter = archive.read("EPUB/one.xhtml").decode()
     assert "遇见了" in first_chapter
@@ -970,7 +975,11 @@ def test_resume_after_ambiguous_ids_reuses_the_safe_sibling(tmp_path):
     recovery = next(ongoing.glob("book-*_bilingual_temp.epub"))
     state = read_state(recovery)
     journal = state["paragraph_recovery"]["entries"]
-    assert [entry["identity"] for entry in journal] == [first_ids[2]]
+    unit_ids = [
+        unit["unit_id"]
+        for unit in state["source_windows"]["windows"][0]["units"]
+    ]
+    assert [entry["identity"] for entry in journal] == [unit_ids[2]]
     assert journal[0]["master"] == ATTRIBUTION_TRANSLATIONS["Dave left."]
     assert state["checkpoint"]["translations"] == []
     assert set(state["catalogue"]) == {"Alice", "Bob", "Carol", "Dave"}

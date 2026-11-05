@@ -394,6 +394,24 @@ class ClassifierSession:
         return list(self._messages)
 
 
+def response_framing_facts(raw):
+    """Count roots in the content the client received from the endpoint.
+
+    More than one root already exists at this boundary when it is reported
+    here.  That makes it upstream corruption relative to the parser; telling
+    gateway assembly apart from model output still needs gateway-side data.
+    """
+    if not isinstance(raw, str):
+        return {}
+    openings = len(re.findall(r"<bbm-response\b", raw))
+    closings = len(re.findall(r"</bbm-response\s*>", raw))
+    return {
+        "bbm_response_openings": openings,
+        "bbm_response_closings": closings,
+        "multiple_roots": openings > 1,
+    }
+
+
 class ChatGPTAPI(Base):
     DEFAULT_PROMPT = "Please help me to translate,`{text}` to {language}, please return only translated content not include the origin text"
 
@@ -849,18 +867,49 @@ class ChatGPTAPI(Base):
     def _protected_completion(self, messages, stage, *, max_tokens=None):
         """Keep reproducible request diagnostics and stop explicit refusals."""
         from copy import deepcopy
+        from book_maker.marker_trace import (
+            response_digest,
+            sanitized_request,
+            trace_location,
+            write_trace,
+        )
         from book_maker.provider_refusal import ProviderRefusal, check_provider_refusal
         self._protected_last_response = None
         self._protected_last_request = None
         self._protected_response_metadata = None
         started = time.monotonic()
+        self._diagnostic_attempt_seq = getattr(self, "_diagnostic_attempt_seq", 0) + 1
+        request_context = dict(getattr(self, "_marker_diagnostic_context", None) or {})
+        requested_units = request_context.get("requested_units")
+        if requested_units is None:
+            last_content = messages[-1].get("content", "") if messages else ""
+            requested_units = len(re.findall(r'<bbm-unit id="', last_content))
+        attempt_id = f"{stage}-{self._diagnostic_attempt_seq:05d}"
+        provider_calls = 0
+        last_request = None
+        cap_requested = None
+        cap_accepted = None
 
         def send(sampling, cap=None):
+            nonlocal provider_calls, last_request, cap_requested, cap_accepted
             request = dict(model=self.model, messages=messages, **(cap or {}), **sampling)
             if self.extra_body:
                 request['extra_body'] = self.extra_body
+            provider_calls += 1
+            last_request = deepcopy(request)
             self._protected_last_request = deepcopy(request)
-            return self.openai_client.chat.completions.create(**request)
+            if cap:
+                cap_requested = dict(cap)
+                cap_accepted = None
+            try:
+                completion = self.openai_client.chat.completions.create(**request)
+            except BadRequestError:
+                if cap:
+                    cap_accepted = False
+                raise
+            if cap:
+                cap_accepted = True
+            return completion
 
         try:
             if max_tokens is None:
@@ -893,12 +942,48 @@ class ChatGPTAPI(Base):
             choice = completion.choices[0]
             raw = choice.message.content or ''
             self._protected_last_response = raw
-            self._protected_response_metadata = {
-                'elapsed_seconds': round(time.monotonic() - started, 3),
-                'finish_reason': getattr(choice, 'finish_reason', None),
-                'model': getattr(completion, 'model', getattr(self, 'model', None)),
-                'refusal': getattr(choice.message, 'refusal', None),
+            usage = getattr(completion, "usage", None)
+            usage_facts = None
+            if usage is not None:
+                usage_facts = {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                    "completion_tokens": getattr(usage, "completion_tokens", None),
+                    "total_tokens": getattr(usage, "total_tokens", None),
+                }
+            metadata = {
+                "attempt_id": attempt_id,
+                "stage": stage,
+                "window_id": request_context.get("window_id"),
+                "chunk": request_context.get("chunk"),
+                "chunk_count": request_context.get("chunk_count"),
+                "requested_units": requested_units,
+                "estimated_output_allowance": request_context.get(
+                    "estimated_output_allowance"
+                ),
+                "provider_calls": provider_calls,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "finish_reason": getattr(choice, 'finish_reason', None),
+                "model": getattr(completion, 'model', getattr(self, 'model', None)),
+                "refusal": getattr(choice.message, 'refusal', None),
+                "usage": usage_facts,
+                "response_characters": len(raw),
+                "response_sha256": response_digest(raw),
+                "output_cap": {
+                    "requested": cap_requested,
+                    "accepted": cap_accepted,
+                },
+                "framing": response_framing_facts(raw),
+                "trace": trace_location(),
             }
+            self._protected_response_metadata = metadata
+            write_trace(
+                {
+                    **metadata,
+                    "request": sanitized_request(last_request),
+                    "response": raw,
+                    "messages": messages,
+                }
+            )
             check_provider_refusal(raw, getattr(choice.message, 'refusal', None),
                                    getattr(choice, 'finish_reason', None))
             return completion

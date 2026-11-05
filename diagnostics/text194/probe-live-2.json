@@ -1,0 +1,66 @@
+{
+  "time": "2026-11-05T04:39:01.273326+00:00",
+  "epub": "C:\\Users\\Tina_\\Documents\\PlayingWithRepo\\bilingual_book_maker-window-names\\ongoing\\超炮，某不科学的恋爱喜剧-c00de9cde483_bilingual_temp.epub",
+  "book": "C:\\Users\\Tina_\\Documents\\PlayingWithRepo\\bilingual_book_maker-window-names\\input\\超炮，某不科学的恋爱喜剧.epub",
+  "window": "w000003",
+  "source_sha256": "9cafbfd170ac5a4718b0a731b911a49050693d90b1532f229727db10ccdd13e2",
+  "recovery_sha256_before": "145008ae56cfa139597e15564548148ffe80e7b3aa0d5044657f20f38a7b45a0",
+  "recovery_sha256_after": "145008ae56cfa139597e15564548148ffe80e7b3aa0d5044657f20f38a7b45a0",
+  "accepted_before": 296,
+  "accepted_after": 296,
+  "prior_used": 1,
+  "max_requests": 2,
+  "calls": 1,
+  "timeout_seconds": 120.0,
+  "requests": [
+    {
+      "prompt": {
+        "window_id": "w000003",
+        "retry_candidates": [
+          "一色同学",
+          "一色弟弟",
+          "御坂同学",
+          "御坂美琴",
+          "白井黑子",
+          "食蜂操祈",
+          "一色",
+          "御坂",
+          "操祈",
+          "美琴",
+          "食蜂",
+          "黑子"
+        ],
+        "context_only_labels": [
+          "御坂旅挂",
+          "哈基黑"
+        ],
+        "previous_validation_error": null
+      },
+      "response": "{\"window_id\":\"w000003\",\"names\":[\"一色\",\"一色同学\",\"一色弟弟\",\"御坂\",\"御坂同学\",\"御坂美琴\",\"操祈\",\"美琴\",\"白井黑子\",\"食蜂\",\"食蜂操祈\",\"黑子\"],\"excluded_candidates\":[\"御坂旅挂\",\"哈基黑\"]}",
+      "error": null,
+      "elapsed_seconds": 20.533
+    }
+  ],
+  "result": {
+    "ok": true,
+    "error": null,
+    "extracted_names": [
+      "一色同学",
+      "一色弟弟",
+      "御坂同学",
+      "御坂美琴",
+      "白井黑子",
+      "食蜂操祈",
+      "一色",
+      "御坂",
+      "操祈",
+      "美琴",
+      "食蜂",
+      "黑子"
+    ],
+    "prepared_units": 143,
+    "bracketed_spans": 176
+  },
+  "recovery_unchanged": true,
+  "protected": true
+}

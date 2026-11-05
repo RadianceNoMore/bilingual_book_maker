@@ -354,6 +354,16 @@ def test_window_bundle_accepts_completed_summary_and_extracted_name(tmp_path):
     assert state["source_windows"]["current_summary"] == "${Alice} returned."
     assert validate_state(state) is state
 
+    # A name discovered later can already occur as plain text in this saved
+    # summary. Publishing the larger catalogue must not invalidate history.
+    expanded = deepcopy(state)
+    expanded["catalogue"]["returned"] = {
+        "key": marker_key("returned"), "label": "returned", "count": 0,
+        "paragraphs": [], "references": [], "contexts": [], "target": None,
+        "mapping_status": "pending", "extracted_from": [],
+    }
+    assert validate_state(expanded) is expanded
+
     corrupted = deepcopy(state)
     corrupted["source_windows"]["windows"][0]["units"][0]["translation"] = "She left."
     with pytest.raises(BundleError, match="does not preserve its prepared marker"):

@@ -13,6 +13,7 @@ from book_maker.marker_workflow import (
     parse_paragraph_reply,
     parse_paragraph_response,
     paragraph_request,
+    retry_unit_cap,
 )
 from book_maker.provider_refusal import ProviderRefusal
 from book_maker.session_context import SessionHistory
@@ -1493,3 +1494,138 @@ def test_unfinished_duplicate_attributes_repair_every_ambiguous_id(tmp_path):
         "c",
     }
 
+
+
+def test_window_chunk_aliases_preserve_permanent_identities_and_reply_order(tmp_path):
+    workflow = _workflow(tmp_path)
+    permanent = [
+        "epub:11:chap_11.xhtml:77:87e5f92fc6a4e547",
+        "epub:11:chap_11.xhtml:78:11aa22bb33cc44dd",
+    ]
+    aliases = {permanent[0]: "u001", permanent[1]: "u002"}
+    sent = []
+
+    def send(payload, feedback=""):
+        sent.append(_payload_ids(payload))
+        return (
+            "<bbm-response>"
+            '<bbm-unit id="u002">Bob arrived.</bbm-unit>'
+            '<bbm-unit id="u001">Alice left.</bbm-unit>'
+            "</bbm-response>"
+        )
+
+    result = workflow.translate(
+        ["Alice left.", "Bob arrived."],
+        send,
+        lambda *args: None,
+        identities=permanent,
+        provider_aliases=aliases,
+    )
+
+    assert result == ["Alice left.", "Bob arrived."]
+    assert sent == [["u001", "u002"]]
+    assert [entry["identity"] for entry in workflow.recovery_entries()] == permanent
+    assert all(entry["source_sha256"] for entry in workflow.recovery_entries())
+    persisted = json.dumps(workflow.state, ensure_ascii=False)
+    assert "u001" not in persisted
+    assert "u002" not in persisted
+
+
+def test_damaged_alias_is_rejected_and_reported_with_expected_observed(
+    tmp_path, capsys
+):
+    workflow = _workflow(tmp_path, max_attempts=1)
+    permanent = "epub:11:chap_11.xhtml:77:87e5f92fc6a4e547"
+
+    def send(payload, feedback=""):
+        assert _payload_ids(payload) == ["u001"]
+        return '<bbm-response><bbm-unit id="u01">Indeed.</bbm-unit></bbm-response>'
+
+    with pytest.raises(MarkerValidationError) as failure:
+        workflow.translate(
+            ["Indeed."],
+            send,
+            lambda *args: None,
+            identities=[permanent],
+            provider_aliases={permanent: "u001"},
+        )
+
+    assert permanent in str(failure.value)
+    output = capsys.readouterr().out
+    assert "u01" in output
+    assert "u001" in output
+    assert "similarity" in output
+    assert "wrong-or-unknown-id" in output
+    assert workflow.recovery_entries() == []
+
+
+def test_repair_batches_shrink_and_accepted_siblings_are_not_resent(tmp_path):
+    workflow = _workflow(tmp_path, max_attempts=4)
+    sources = [f"Paragraph {index}." for index in range(1, 11)]
+    identities = [f"p{index:02d}" for index in range(1, 11)]
+    sizes = []
+    batches = []
+
+    def send(payload, feedback=""):
+        ids = _payload_ids(payload)
+        sizes.append(len(ids))
+        batches.append(ids)
+        if len(ids) > 2:
+            # Whole-batch structural failure: no unit is safely attributable.
+            return '<bbm-response><bbm-unit id="broken"'
+        return (
+            "<bbm-response>"
+            + "".join(
+                f'<bbm-unit id="{identity}">Translated {identity}.</bbm-unit>'
+                for identity in ids
+            )
+            + "</bbm-response>"
+        )
+
+    result = workflow.translate(
+        sources, send, lambda *args: None, identities=identities
+    )
+
+    assert result == [f"Translated {identity}." for identity in identities]
+    assert sizes == [10, 8, 2, 2, 2, 2, 2]
+    accepted = set()
+    for ids in batches[1:]:
+        assert not (set(ids) & accepted), "accepted units must not be resent"
+        if len(ids) <= 2:
+            accepted.update(ids)
+    assert accepted == set(identities)
+
+
+def test_retry_unit_caps_follow_the_declared_schedule():
+    assert [retry_unit_cap(attempt, 40) for attempt in range(1, 6)] == [
+        40,
+        8,
+        2,
+        1,
+        1,
+    ]
+    assert retry_unit_cap(1, 3) == 3
+    assert retry_unit_cap(2, 3) == 3
+
+
+def test_window_repair_feedback_uses_aliases_only():
+    aliases = {
+        "epub:11:chap_11.xhtml:77:87e5f92fc6a4e547": "u001",
+        "epub:11:chap_11.xhtml:78:11aa22bb33cc44dd": "u002",
+    }
+    items = [
+        SimpleNamespace(
+            identity="epub:11:chap_11.xhtml:77:87e5f92fc6a4e547",
+            source="Alice left ${Alice}.",
+        ),
+        SimpleNamespace(
+            identity="epub:11:chap_11.xhtml:78:11aa22bb33cc44dd",
+            source="Bob arrived.",
+        ),
+    ]
+
+    feedback = MarkerWorkflow._window_repair_feedback(items, aliases)
+
+    assert '"id":"u001"' in feedback
+    assert '"id":"u002"' in feedback
+    assert "epub:11:chap_11.xhtml" not in feedback

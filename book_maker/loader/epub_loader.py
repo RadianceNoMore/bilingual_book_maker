@@ -4610,9 +4610,17 @@ class EPUBBookLoader(BaseBookLoader):
                 )
             )
             for chunk_number, part in enumerate(slices, 1):
+                # Aliases are derived from the frozen chunk, not from the
+                # outstanding subset, so resume and every retry reuse the
+                # same provider-facing identifiers.
+                chunk_base_units = list(window.units[part])
+                alias_by_id = {
+                    unit.identity: f"u{index:03d}"
+                    for index, unit in enumerate(chunk_base_units, 1)
+                }
                 chunk_units = [
                     unit
-                    for unit in window.units[part]
+                    for unit in chunk_base_units
                     if record.get("status") != "complete"
                     and not (
                         unit.identity in set(record.get("accepted_unit_ids") or [])
@@ -4672,6 +4680,18 @@ class EPUBBookLoader(BaseBookLoader):
                     f"{chunk_cost} source tokens, {prefix_tokens} accepted-prefix "
                     f"tokens, {num_tokens_from_text(incoming_summary)} summary tokens)."
                 )
+                previous_diagnostic_context = getattr(
+                    self.translate_model, "_marker_diagnostic_context", None
+                )
+                self.translate_model._marker_diagnostic_context = {
+                    "window_id": window.identity,
+                    "chunk": chunk_number,
+                    "chunk_count": len(slices),
+                    "requested_units": len(chunk_units),
+                    # An estimated allowance only; no translation output cap
+                    # is sent to the endpoint unless metadata says otherwise.
+                    "estimated_output_allowance": max(512, chunk_cost),
+                }
                 try:
                     self._active_source_window_stage = (
                         "translation",
@@ -4689,6 +4709,10 @@ class EPUBBookLoader(BaseBookLoader):
                         persist=self._save_progress,
                         premarked=True,
                         context=context,
+                        provider_aliases={
+                            unit.identity: alias_by_id[unit.identity]
+                            for unit in chunk_units
+                        },
                     )
                 except BaseException as error:
                     recovered = {}
@@ -4734,6 +4758,10 @@ class EPUBBookLoader(BaseBookLoader):
                     self._active_source_window_stage = None
                     self._save_progress()
                     raise MarkerValidationError(detail) from error
+                finally:
+                    self.translate_model._marker_diagnostic_context = (
+                        previous_diagnostic_context
+                    )
                 self._active_source_window_stage = None
                 accepted = dict(zip(identities, translations))
                 workflow.mark_window_unit_accepted(window.identity, accepted)

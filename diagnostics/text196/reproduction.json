@@ -1,0 +1,179 @@
+{
+  "source": "text_196 offline fixtures",
+  "provider_calls": 0,
+  "recovery_epub_touched": false,
+  "retry_schedule": [
+    {
+      "attempt": 1,
+      "max_units": 40
+    },
+    {
+      "attempt": 2,
+      "max_units": 8
+    },
+    {
+      "attempt": 3,
+      "max_units": 2
+    },
+    {
+      "attempt": 4,
+      "max_units": 1
+    },
+    {
+      "attempt": 5,
+      "max_units": 1
+    }
+  ],
+  "cases": [
+    {
+      "case": "damaged-id",
+      "requested": [
+        "u001"
+      ],
+      "accepted_ids": [],
+      "framing_error": null,
+      "salvaged": false,
+      "unknown_ids": [
+        "u01"
+      ],
+      "diagnostics": [
+        "discarded unit with unknown or missing id 'u01'"
+      ],
+      "per_id": {
+        "u001": {
+          "status": "pending",
+          "category": "wrong-or-unknown-id",
+          "error": "missing from response",
+          "closest_observed": "u01",
+          "similarity": 0.857,
+          "acceptance_rule": "similarity never authorizes acceptance"
+        }
+      },
+      "framing": {
+        "bbm_response_openings": 1,
+        "bbm_response_closings": 1,
+        "multiple_roots": false
+      }
+    },
+    {
+      "case": "duplicate-id",
+      "requested": [
+        "u001"
+      ],
+      "accepted_ids": [],
+      "framing_error": null,
+      "salvaged": false,
+      "unknown_ids": [],
+      "diagnostics": [],
+      "per_id": {
+        "u001": {
+          "status": "pending",
+          "category": "duplicate-id",
+          "error": "duplicate bbm-unit id",
+          "closest_observed": null,
+          "similarity": 0.0,
+          "acceptance_rule": "similarity never authorizes acceptance"
+        }
+      },
+      "framing": {
+        "bbm_response_openings": 1,
+        "bbm_response_closings": 1,
+        "multiple_roots": false
+      }
+    },
+    {
+      "case": "truncated-final-unit",
+      "requested": [
+        "u001",
+        "u002"
+      ],
+      "accepted_ids": [
+        "u001"
+      ],
+      "framing_error": "paragraph response is not well-formed XML: Premature end of data in tag bbm-unit line 1, line 1, column 90 (<string>, line 1)",
+      "salvaged": true,
+      "unknown_ids": [],
+      "diagnostics": [],
+      "per_id": {
+        "u001": {
+          "status": "accepted"
+        },
+        "u002": {
+          "status": "pending",
+          "category": "incomplete-response",
+          "error": "ambiguous or incomplete frame",
+          "closest_observed": null,
+          "similarity": 0.0,
+          "acceptance_rule": "similarity never authorizes acceptance"
+        }
+      },
+      "framing": {
+        "bbm_response_openings": 1,
+        "bbm_response_closings": 0,
+        "multiple_roots": false
+      }
+    },
+    {
+      "case": "unfinished-attribute-restart",
+      "requested": [
+        "u001",
+        "u002"
+      ],
+      "accepted_ids": [
+        "u001"
+      ],
+      "framing_error": "paragraph response is not well-formed XML: AttValue: ' expected, line 1, column 102 (<string>, line 1)",
+      "salvaged": true,
+      "unknown_ids": [],
+      "diagnostics": [
+        "an unfinished or malformed bbm-unit opening made one or more otherwise complete-looking units ambiguous; those units remain pending and are never accepted by position"
+      ],
+      "per_id": {
+        "u001": {
+          "status": "accepted"
+        },
+        "u002": {
+          "status": "pending",
+          "category": "duplicate-id",
+          "error": "duplicate or ambiguous bbm-unit id",
+          "closest_observed": null,
+          "similarity": 0.0,
+          "acceptance_rule": "similarity never authorizes acceptance"
+        }
+      },
+      "framing": {
+        "bbm_response_openings": 1,
+        "bbm_response_closings": 0,
+        "multiple_roots": false
+      }
+    },
+    {
+      "case": "multiple-roots",
+      "requested": [
+        "u001",
+        "u002"
+      ],
+      "accepted_ids": [
+        "u001",
+        "u002"
+      ],
+      "framing_error": "paragraph response is not well-formed XML: Extra content at the end of the document, line 1, column 63 (<string>, line 1)",
+      "salvaged": true,
+      "unknown_ids": [],
+      "diagnostics": [],
+      "per_id": {
+        "u001": {
+          "status": "accepted"
+        },
+        "u002": {
+          "status": "accepted"
+        }
+      },
+      "framing": {
+        "bbm_response_openings": 2,
+        "bbm_response_closings": 2,
+        "multiple_roots": true
+      }
+    }
+  ]
+}

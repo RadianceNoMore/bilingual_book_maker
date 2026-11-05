@@ -232,6 +232,7 @@ def validate_state(state):
             validate_summary(
                 windows.get("current_summary", ""),
                 catalogue.keys(),
+                check_plain_labels=False,
             ) if windows.get("current_summary") else None
         except MarkerError as error:
             raise BundleError(
@@ -374,6 +375,8 @@ def validate_state(state):
                 validation = record["summary_validation"]
                 if (
                     validation.get("version") != 1
+                    or validation.get("policy")
+                    not in (None, "plain-labels-allowed-v1")
                     or not isinstance(validation.get("language"), str)
                     or not isinstance(validation.get("budget_tokens"), int)
                     or not isinstance(validation.get("estimated_tokens"), int)
@@ -385,7 +388,7 @@ def validate_state(state):
                 ):
                     raise BundleError("Completed source-window summary metadata is malformed")
                 try:
-                    validate_summary(record["outgoing_summary"], catalogue.keys())
+                    validate_summary(record["outgoing_summary"], catalogue.keys(), check_plain_labels=False)
                 except MarkerError as error:
                     raise BundleError(
                         f"Completed source-window summary is invalid: {error}"

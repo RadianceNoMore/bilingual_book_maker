@@ -3,9 +3,10 @@
 The real run failed after window w000001 because the summary model wrote a few
 catalogue labels as plain prose, the strict validator rejected each draft, and
 the third attempt's transient provider boilerplate ended the run.  These tests
-pin the two independent repairs:
+pin the revised policy and the independent retry repair:
 
-* known labels left outside markers are bracketed deterministically;
+* plain original-language name mentions are accepted without rewriting, while
+  malformed or unknown marker syntax is still rejected;
 * a provider boilerplate reply is retried on its own budget without appending
   validation feedback to a prompt that produced no draft.
 """
@@ -147,27 +148,46 @@ def test_source_summary_prompt_lists_only_relevant_catalogue_labels():
     )
     data = __import__("json").loads(prompt.rsplit("\n", 1)[-1])
     assert data["catalogue_labels"] == ["Alice", "Carol"]
-    assert "Every label listed in catalogue_labels" in prompt
+    assert "Plain original-language name mentions are allowed" in prompt
+    assert "Markers are optional here" in prompt
+    assert "must be written as ${label} at every mention" not in prompt
 
 
 # --------------------------------------------------------- retry behaviour
 
 
-def test_summary_accepts_labels_repaired_before_validation(tmp_path):
-    model = SummaryModel(
-        ["御坂美琴在学园都市遇见一色，${御坂美琴}点了点头。"]
-    )
+def test_summary_accepts_plain_labels_without_rewriting(tmp_path):
+    model = SummaryModel(["Alice went home; Bob stayed behind."])
     workflow, window = _prepared_workflow(
-        tmp_path, model, "御坂美琴在学园都市遇见一色。", ["御坂美琴", "学园都市", "一色"]
+        tmp_path, model, "Alice met Bob.", ["Alice", "Bob"]
     )
 
     summary = workflow.summarize_source_window(window, budget=1500)
 
-    assert summary == "${御坂美琴}在${学园都市}遇见${一色}，${御坂美琴}点了点头。"
+    assert summary == "Alice went home; Bob stayed behind."
     record = workflow.prepared_window(window)
     assert record["status"] == "complete"
-    assert record["summary_validation"]["repaired_markers"] == 3
+    assert record["summary_validation"]["repaired_markers"] == 0
+    assert record["summary_validation"]["policy"] == "plain-labels-allowed-v1"
     assert workflow.source_summary == summary
+
+
+def test_summary_still_rejects_malformed_or_unknown_markers(tmp_path):
+    malformed = SummaryModel(["Alice went ${home."])
+    workflow, window = _prepared_workflow(
+        tmp_path, malformed, "Alice met Bob.", ["Alice", "Bob"]
+    )
+    malformed.max_chunk_attempts = 1
+    with pytest.raises(MarkerValidationError, match="marker"):
+        workflow.summarize_source_window(window, budget=1500)
+
+    unknown = SummaryModel(["${Unknown} left."])
+    workflow, window = _prepared_workflow(
+        tmp_path, unknown, "Alice met Bob.", ["Alice", "Bob"]
+    )
+    unknown.max_chunk_attempts = 1
+    with pytest.raises(MarkerValidationError, match="[Uu]nknown"):
+        workflow.summarize_source_window(window, budget=1500)
 
 
 def test_provider_error_retries_the_same_prompt_and_succeeds(tmp_path, monkeypatch):
@@ -219,3 +239,31 @@ def test_terminal_refusal_stops_without_a_second_request(tmp_path):
     record = workflow.prepared_window(window)
     assert record["status"] == "summary_pending"
     assert workflow.source_windows_state["summary_pending_window"] == "w000001"
+
+
+def test_summary_accepts_a_short_known_label_inside_a_longer_expression(tmp_path):
+    """Old substring repair would have rewritten Albert into ${Al}bert."""
+    model = SummaryModel(["Albert stayed with Bob."])
+    workflow, window = _prepared_workflow(
+        tmp_path, model, "Al met Bob.", ["Al", "Bob"]
+    )
+
+    summary = workflow.summarize_source_window(window, budget=1500)
+
+    assert summary == "Albert stayed with Bob."
+    assert "${" not in summary
+    assert workflow.prepared_window(window)["summary_validation"][
+        "repaired_markers"
+    ] == 0
+
+
+def test_summary_preserves_valid_markers_without_adding_missing_ones(tmp_path):
+    model = SummaryModel(["${Alice} left Bob behind."])
+    workflow, window = _prepared_workflow(
+        tmp_path, model, "Alice met Bob.", ["Alice", "Bob"]
+    )
+
+    summary = workflow.summarize_source_window(window, budget=1500)
+
+    assert summary == "${Alice} left Bob behind."
+    assert summary.count("${") == 1

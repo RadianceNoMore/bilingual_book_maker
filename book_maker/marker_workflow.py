@@ -13,6 +13,7 @@ import html
 import json
 import re
 import time
+from difflib import SequenceMatcher
 from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -50,6 +51,12 @@ _LOCALIZATION_PREFIXES = ("toc:", "nav:", "dc:", "filename:")
 CONTEXT_VALIDATION_VERSION = 1
 DEFAULT_CONTEXT_REBUILD_BUDGET = 8192
 DEFAULT_COMPACTION_ATTEMPTS = 5
+SOURCE_SUMMARY_POLICY = "plain-labels-allowed-v1"
+
+# Repair requests shrink as a paragraph's own attempt count grows.  Attempt 1
+# is the caller's already-sized chunk, so its cap is the chunk itself.
+RETRY_UNIT_CAPS = {2: 8, 3: 2}
+RETRY_UNIT_CAP_AFTER = 1
 
 
 class MarkerValidationError(MarkerError, BatchMismatch):
@@ -126,6 +133,7 @@ class _PendingParagraph:
     attempts: int = 0
     last_error: str = ""
     last_stage: str = ""
+    last_category: str = ""
     accepted: str | None = None
     delta: dict = field(default_factory=dict)
     # Narrowly scoped structured validation metadata (e.g. which label was
@@ -166,6 +174,59 @@ def _source_digest(texts):
     return sha256(
         json.dumps(list(texts), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
+
+
+_FAILURE_CATEGORIES = (
+    ("duplicate", "duplicate-id"),
+    ("nested", "malformed-unit"),
+    ("not well-formed", "malformed-xml"),
+    ("incomplete", "incomplete-response"),
+    ("ambiguous", "ambiguous-frame"),
+    ("marker multiset", "marker-mismatch"),
+    ("missing from response", "missing-unit"),
+)
+
+
+def classify_unit_failure(error, *, salvaged=False, framing_error=""):
+    """A stable console category for one rejected unit.
+
+    The unit-specific reason wins over whole-response framing: a duplicate ID
+    inside a salvaged response is still a duplicate, not merely an incomplete
+    response.
+    """
+    text = (error or "").lower()
+    for needle, category in _FAILURE_CATEGORIES:
+        if needle in text:
+            return category
+    if framing_error:
+        return "malformed-xml" if not salvaged else "incomplete-response"
+    return "unit-rejected"
+
+
+def closest_unknown(expected, unknown):
+    """Best explanatory match from rejected IDs; never an acceptance rule."""
+    candidates = [
+        value
+        for value in (unknown or [])
+        if isinstance(value, str) and not value.startswith("<")
+    ]
+    if not candidates:
+        return None, 0.0
+    scored = [
+        (SequenceMatcher(None, expected, value).ratio(), value)
+        for value in candidates
+    ]
+    ratio, value = max(scored)
+    return value, ratio
+
+
+def retry_unit_cap(attempt, initial_cap):
+    """Maximum units in a request at ``attempt`` (1-based, includes the first)."""
+    initial_cap = max(1, int(initial_cap))
+    attempt = max(1, int(attempt))
+    if attempt <= 1:
+        return initial_cap
+    return min(initial_cap, RETRY_UNIT_CAPS.get(attempt, RETRY_UNIT_CAP_AFTER))
 
 
 def paragraph_request(sources, identities=None):
@@ -685,6 +746,12 @@ def _parse_salvaged(text, identities, framing_error):
         reply.diagnostics.append(
             f"incomplete {truncated} consumed the remaining response as "
             "non-unit material"
+        )
+    if ambiguous_ids or ambiguous_all:
+        reply.diagnostics.append(
+            "an unfinished or malformed bbm-unit opening made one or more "
+            "otherwise complete-looking units ambiguous; those units remain "
+            "pending and are never accepted by position"
         )
     by_id = {}
     for record in records:
@@ -1371,7 +1438,7 @@ class MarkerWorkflow:
 
     def translate(
         self, sources, send, validate_quality, identities=None, persist=None,
-        *, premarked=False, context=None,
+        *, premarked=False, context=None, provider_aliases=None,
     ):
         """Translate one batch, repairing failed paragraphs together.
 
@@ -1414,6 +1481,30 @@ class MarkerWorkflow:
         if len(set(identities)) != len(identities):
             raise MarkerValidationError("Paragraph identities must be unique")
 
+        # Provider-facing aliases are scoped to this operation.  Permanent IDs
+        # remain the only identities used for validation, journaling and
+        # checkpoints; the alias map is reconstructed deterministically from
+        # the frozen chunk on resume.
+        provider_aliases = dict(provider_aliases or {})
+        if provider_aliases:
+            missing = [identity for identity in identities if identity not in provider_aliases]
+            if missing:
+                raise MarkerValidationError(
+                    "Provider aliases are missing for paragraph identities: "
+                    + ", ".join(missing[:5])
+                )
+            aliases = [provider_aliases[identity] for identity in identities]
+            if (
+                any(not isinstance(alias, str) or not alias for alias in aliases)
+                or len(set(aliases)) != len(aliases)
+            ):
+                raise MarkerValidationError(
+                    "Provider aliases must be non-empty and unique"
+                )
+
+        def provider_id(item):
+            return provider_aliases.get(item.identity, item.identity)
+
         request_digest = _source_digest(sources)
         items = []
         for index, (identity, source) in enumerate(zip(identities, sources), 1):
@@ -1431,7 +1522,9 @@ class MarkerWorkflow:
             raise MarkerValidationError("max_chunk_attempts must be a positive integer")
         session = getattr(self.model, "session", None)
         request_history = deepcopy(session.messages()) if session is not None else []
-        first_send = True
+        chunk_token_budget = sum(_tokens(item.source) for item in items)
+        provider_calls_total = 0
+        usage_total = None
         last_raw = None
         while True:
             outstanding = [item for item in items if item.accepted is None]
@@ -1440,25 +1533,33 @@ class MarkerWorkflow:
             eligible = [item for item in outstanding if item.attempts < limit]
             if len(eligible) != len(outstanding):
                 self._exhaust_recovery(outstanding, limit, last_raw)
-            subset = eligible
+            subset = self._next_retry_batch(
+                eligible, len(items), chunk_token_budget
+            )
             for item in subset:
                 item.attempts += 1
-            if first_send:
-                _ids, payload = paragraph_request(
-                    [item.source for item in subset],
-                    [item.identity for item in subset],
-                )
+            request_ids = [provider_id(item) for item in subset]
+            _ids, payload = paragraph_request(
+                [item.source for item in subset], request_ids
+            )
+            attempt_number = max(item.attempts for item in subset)
+            if attempt_number == 1:
                 feedback = ""
-                first_send = False
             else:
-                _ids, payload = paragraph_request(
-                    [item.source for item in subset],
-                    [item.identity for item in subset],
-                )
                 # Raw errors stay local. Prepared-window retries receive only
                 # source-derived marker counts and fixed protocol instructions.
                 self.retry_feedback = self._repair_feedback(subset, items)
-                feedback = self._window_repair_feedback(subset) if premarked else ""
+                feedback = (
+                    self._window_repair_feedback(subset, provider_aliases)
+                    if premarked
+                    else ""
+                )
+                cap = retry_unit_cap(attempt_number, len(items))
+                print(
+                    f"[yellow]Protected names: repair request attempt "
+                    f"{attempt_number}/{limit} carries {len(subset)} unit(s) "
+                    f"(cap {cap}); outstanding {len(outstanding)}.[/yellow]"
+                )
             for item in subset:
                 item.last_error = ""
                 item.last_stage = ""
@@ -1486,7 +1587,16 @@ class MarkerWorkflow:
 
                 last_raw = None
                 if isinstance(error, ProviderRefusal):
-                    self._record_failure("provider-refusal", "", str(error))
+                    self._record_failure(
+                        "provider-refusal",
+                        getattr(self.model, "_protected_last_response", "") or "",
+                        str(error),
+                    )
+                    print(
+                        "[bold red]Protected names: provider refusal "
+                        f"[explicit-refusal]: {error}. This is terminal; no "
+                        "retry is attempted.[/bold red]"
+                    )
                     raise
                 if getattr(self.model, "_fatal_error_detected", False) or not self._retryable(error):
                     self._record_failure("paragraph-transport", "", str(error))
@@ -1494,12 +1604,32 @@ class MarkerWorkflow:
                 self._record_failure("paragraph-transport", "", str(error))
                 for item in subset:
                     item.last_stage = "transport"
+                    item.last_category = "transport-error"
                     item.last_error = f"transport failure: {error}"
                 if all(item.attempts >= limit for item in outstanding):
-                    self._exhaust_recovery(outstanding, limit, None)
+                    self._exhaust_recovery(
+                        outstanding,
+                        limit,
+                        None,
+                        provider_calls=provider_calls_total,
+                        usage=usage_total,
+                    )
                 self._backoff(max(item.attempts for item in subset))
                 continue
             last_raw = raw
+            response_metadata = getattr(
+                self.model, "_protected_response_metadata", None
+            ) or {}
+            provider_calls_total += int(response_metadata.get("provider_calls") or 0)
+            response_usage = response_metadata.get("usage")
+            if isinstance(response_usage, dict):
+                total = response_usage.get("total_tokens")
+                if isinstance(total, (int, float)):
+                    usage_total = (usage_total or 0) + int(total)
+                elif response_usage.get("prompt_tokens") is not None:
+                    usage_total = (usage_total or 0) + int(
+                        response_usage.get("prompt_tokens") or 0
+                    ) + int(response_usage.get("completion_tokens") or 0)
             accepted = []
             failed = []
             category, matched = classify_provider_category(raw)
@@ -1518,21 +1648,44 @@ class MarkerWorkflow:
                 )
                 for item in subset:
                     item.last_stage = "provider-error"
+                    item.last_category = "provider-boilerplate"
                     item.last_error = reason
                     failed.append(item)
             else:
-                reply = parse_paragraph_reply(
-                    raw, [item.identity for item in subset]
-                )
+                reply = parse_paragraph_reply(raw, request_ids)
+                if reply.framing_error:
+                    response_meta = getattr(
+                        self.model, "_protected_response_metadata", None
+                    ) or {}
+                    framing = response_meta.get("framing") or {}
+                    if framing.get("multiple_roots"):
+                        print(
+                            "[yellow]Protected names: multiple bbm-response roots "
+                            "were present in the content received from the "
+                            "provider. That corruption is upstream of this "
+                            "parser; units are not accepted by position.[/yellow]"
+                        )
+                    print(
+                        "[yellow]Protected names: response framing "
+                        f"[{'incomplete-response' if reply.salvaged else 'malformed-xml'}]: "
+                        f"{reply.framing_error[:300]}. Complete-looking units can "
+                        "be ambiguous after an unfinished opening; similarity or "
+                        "position never authorizes acceptance.[/yellow]"
+                    )
                 if reply.salvaged or reply.unknown:
+                    reason = (
+                        (reply.framing_error or "")
+                        + ("; " if reply.framing_error else "")
+                        + f"unknown or commentary units: {len(reply.unknown)}"
+                    )
+                    if reply.diagnostics:
+                        reason += "; " + "; ".join(reply.diagnostics[:5])
                     self._record_failure(
                         "paragraph-salvage"
                         if reply.salvaged
                         else "paragraph-unknown-unit",
                         raw,
-                        (reply.framing_error or "")
-                        + ("; " if reply.framing_error else "")
-                        + f"unknown or commentary units: {len(reply.unknown)}",
+                        reason,
                     )
                 elif reply.diagnostics:
                     self._record_failure(
@@ -1540,30 +1693,56 @@ class MarkerWorkflow:
                         raw,
                         "; ".join(reply.diagnostics[:5]),
                     )
-                for item in subset:
-                    if item.identity in reply.texts:
+                for item, request_id in zip(subset, request_ids):
+                    if request_id in reply.texts:
                         try:
                             item.delta = self._validate_candidate(
                                 item,
-                                reply.texts[item.identity],
+                                reply.texts[request_id],
                                 validate_quality,
                             )
                         except Exception as error:
                             item.last_stage = "validation"
                             item.last_error = str(error)
+                            item.last_category = classify_unit_failure(
+                                str(error)
+                            )
                             item.last_failure = getattr(
                                 error, "label_details", None
                             )
                             failed.append(item)
                         else:
-                            item.accepted = reply.texts[item.identity]
+                            item.accepted = reply.texts[request_id]
                             accepted.append(item)
                     else:
                         item.last_stage = "response"
-                        item.last_error = (
-                            reply.errors.get(item.identity)
-                            or "missing from response"
+                        error = reply.errors.get(request_id) or "missing from response"
+                        item.last_category = classify_unit_failure(
+                            error,
+                            salvaged=reply.salvaged,
+                            framing_error=reply.framing_error or "",
                         )
+                        if item.last_category in ("missing-unit", "ambiguous-frame"):
+                            observed, ratio = closest_unknown(
+                                request_id, reply.unknown
+                            )
+                            if observed and ratio >= 0.6:
+                                item.last_error = (
+                                    f"{error}; candidate {observed!r} was rejected. "
+                                    f"Closest requested id {request_id!r} "
+                                    f"(similarity {ratio:.2f}); similarity is "
+                                    "explanatory only and never authorizes acceptance."
+                                )
+                                item.last_category = "wrong-or-unknown-id"
+                                failed.append(item)
+                                continue
+                        if request_id != item.identity:
+                            item.last_error = (
+                                f"{error}; requested provider id {request_id!r} "
+                                f"for permanent id {item.identity!r}"
+                            )
+                        else:
+                            item.last_error = error
                         failed.append(item)
             if accepted:
                 self._commit_round(accepted, items, request_digest)
@@ -1590,9 +1769,18 @@ class MarkerWorkflow:
                 for item in failed[:5]:
                     print(
                         f"Protected names: paragraph {item.identity} failed "
-                        f"attempt {item.attempts}/{limit} at {item.last_stage}: "
+                        f"attempt {item.attempts}/{limit} at "
+                        f"{item.last_stage} [{item.last_category or 'unclassified'}]: "
                         f"{item.last_error[:600]}"
                     )
+                    if item.attempts < limit:
+                        next_cap = retry_unit_cap(item.attempts + 1, len(items))
+                        print(
+                            f"Protected names: paragraph {item.identity} has "
+                            f"{limit - item.attempts} attempt(s) left; next "
+                            f"request cap for its attempt group is {next_cap} "
+                            "unit(s)."
+                        )
                 if len(failed) > 5:
                     print(
                         f"Protected names: {len(failed) - 5} more paragraph "
@@ -1604,7 +1792,13 @@ class MarkerWorkflow:
                     f"[yellow]{done}/{len(items)} accepted; retry budget "
                     f"exhausted for {len(outstanding)} paragraph(s)[/yellow]"
                 )
-                self._exhaust_recovery(outstanding, limit, raw)
+                self._exhaust_recovery(
+                    outstanding,
+                    limit,
+                    raw,
+                    provider_calls=provider_calls_total,
+                    usage=usage_total,
+                )
             next_attempt = max(item.attempts for item in outstanding) + 1
             print(
                 f"[yellow]{done}/{len(items)} accepted; retrying "
@@ -1629,6 +1823,34 @@ class MarkerWorkflow:
         return translations
 
     @staticmethod
+    def _next_retry_batch(outstanding, initial_cap, token_budget):
+        """FIFO repair queue grouped by attempt count.
+
+        The request cap follows the attempt number the included paragraphs
+        are about to make.  Paragraphs waiting in the queue are not charged.
+        """
+        queue = sorted(outstanding, key=lambda item: item.index)
+        if not queue:
+            return []
+        # Prefer the least-retried group so an early stubborn unit cannot
+        # starve paragraphs that have not yet had their own attempts.
+        pre_attempts = min(item.attempts for item in queue)
+        cap = retry_unit_cap(pre_attempts + 1, initial_cap)
+        subset = []
+        used = 0
+        for item in queue:
+            if item.attempts != pre_attempts:
+                continue
+            if len(subset) >= cap:
+                break
+            cost = _tokens(item.source)
+            if subset and used + cost > token_budget:
+                break
+            subset.append(item)
+            used += cost
+        return subset
+
+    @staticmethod
     def _retryable(error):
         from book_maker.loader.helper import _is_retryable
 
@@ -1642,12 +1864,91 @@ class MarkerWorkflow:
         )
         time.sleep(delay)
 
-    def _exhaust_recovery(self, outstanding, limit, raw):
+    def _durable_counts(self):
+        checkpoint = self.state.get("checkpoint") or {}
+        if self.window_mode:
+            # Window checkpoints persist accepted unit identities in the
+            # source-window records; accepted_job_ids holds parent job IDs and
+            # would mix namespaces with the unit-level journal.
+            checkpoint_ids = {
+                identity
+                for record in self.source_windows_state.get("windows", [])
+                for identity in (record.get("accepted_unit_ids") or [])
+                if isinstance(identity, str)
+            }
+        else:
+            checkpoint_ids = {
+                value
+                for value in (checkpoint.get("accepted_job_ids") or [])
+                if isinstance(value, str)
+            }
+        journal = self._recovery().get("entries") or []
+        journal_ids = {
+            entry.get("identity")
+            for entry in journal
+            if isinstance(entry.get("identity"), str)
+        }
+        additional_journal = journal_ids - checkpoint_ids
+        return (
+            len(checkpoint_ids),
+            len(additional_journal),
+            len(checkpoint_ids | journal_ids),
+        )
+
+    def _exhaust_recovery(
+        self, outstanding, limit, raw, *, provider_calls=None, usage=None
+    ):
         details = "; ".join(
             f"{item.identity} (paragraph {item.index}, "
             f"{item.last_stage or 'unclassified'}): "
             f"{item.last_error or 'failed validation'}"
             for item in outstanding
+        )
+        context = getattr(self.model, "_marker_diagnostic_context", None) or {}
+        window_id = context.get("window_id") or "legacy batch"
+        chunk = context.get("chunk")
+        chunk_count = context.get("chunk_count")
+        chunk_label = (
+            f"chunk {chunk}/{chunk_count}" if chunk is not None else "single batch"
+        )
+        checkpoint_count, journal_count, durable_count = self._durable_counts()
+        try:
+            from book_maker.marker_trace import trace_location
+
+            trace = trace_location()
+        except Exception:
+            trace = None
+        logical_attempts = sum(item.attempts for item in outstanding)
+        print(
+            "[bold red]Protected names: stopping in window "
+            f"{window_id} {chunk_label}. "
+            f"{len(outstanding)} unit(s) still pending: "
+            f"{', '.join(item.identity for item in outstanding[:12])}"
+            + ("..." if len(outstanding) > 12 else "")
+            + f". Durable state: {checkpoint_count} checkpointed, "
+            f"{journal_count} additional unique journal entr"
+            f"{'y' if journal_count == 1 else 'ies'}, "
+            f"{durable_count} total durable unit(s). "
+            f"Logical paragraph attempts this batch: {logical_attempts} "
+            "(name-extraction and cumulative-summary requests are separate "
+            "stages and are not counted here)"
+            + (
+                f"; observed provider calls: {provider_calls}"
+                if provider_calls is not None
+                else "; provider-call count unavailable"
+            )
+            + (
+                f"; usage: {usage} tokens"
+                if usage is not None
+                else "; token usage unavailable"
+            )
+            + f". Trace: {trace or 'disabled (set BBM_MARKER_TRACE_DIR to enable)'}."
+            "[/bold red]"
+        )
+        print(
+            "[yellow]Protected names: resume will reuse prepared names, retry "
+            "only unresolved work, then continue the unprocessed remainder; "
+            "the whole book is not down to one paragraph.[/yellow]"
         )
         self.retry_feedback = details
         self._record_failure(
@@ -1664,10 +1965,14 @@ class MarkerWorkflow:
         )
 
     @staticmethod
-    def _window_repair_feedback(items):
+    def _window_repair_feedback(items, provider_aliases=None):
         """Source-derived constraints only; never quote rejected output/errors."""
+        aliases = provider_aliases or {}
         rows = [
-            {"id": item.identity, "expected_marker_counts": dict(Counter(markers(item.source)))}
+            {
+                "id": aliases.get(item.identity, item.identity),
+                "expected_marker_counts": dict(Counter(markers(item.source))),
+            }
             for item in items
         ]
         return (
@@ -2067,7 +2372,7 @@ class MarkerWorkflow:
             summary = source_state.get("current_summary") or ""
             if summary:
                 try:
-                    validate_summary(summary, self.known_labels)
+                    validate_summary(summary, self.known_labels, check_plain_labels=False)
                 except MarkerError as error:
                     raise MarkerValidationError(
                         f"Saved cumulative source summary failed validation: {error}. "
@@ -2437,6 +2742,12 @@ class MarkerWorkflow:
         if window is not None:
             record["window_id"] = window.identity
             record["window_source_sha256"] = window.source_digest
+        try:
+            from book_maker.marker_trace import trace_location
+
+            record["trace"] = trace_location()
+        except Exception:
+            record["trace"] = None
         failures = self.state.setdefault("diagnostics", {}).setdefault("failures", [])
         failures.append(record)
         del failures[:-_DIAGNOSTIC_LIMIT]
@@ -2647,7 +2958,7 @@ class MarkerWorkflow:
                         "source digest or validation-version check."
                     )
                 try:
-                    validate_summary(summary, self.known_labels)
+                    validate_summary(summary, self.known_labels, check_plain_labels=False)
                 except MarkerError as error:
                     raise MarkerValidationError(
                         f"Saved summary for {window.identity} is invalid: {error}"
@@ -2779,6 +3090,7 @@ class MarkerWorkflow:
     def commit_window_summary(
         self, window, summary, *, language, budget,
         request_sha256=None, validation_version=1, repaired_markers=0,
+        summary_policy=None,
     ):
         record = self.prepared_window(window)
         if record is None:
@@ -2788,6 +3100,7 @@ class MarkerWorkflow:
         record["outgoing_summary"] = summary
         record["summary_validation"] = {
             "version": validation_version,
+            "policy": summary_policy,
             "language": language,
             "budget_tokens": budget,
             "estimated_tokens": _tokens(summary),
@@ -3102,7 +3415,6 @@ class MarkerWorkflow:
         self, window, *, persist=None, source_language=None, budget=1500
     ):
         """Update the cumulative original-language context after all units pass."""
-        from book_maker.marker_names import bracket_known_labels
         from book_maker.provider_refusal import (
             ProviderRefusal,
             ProviderResponseUnusable,
@@ -3169,14 +3481,16 @@ class MarkerWorkflow:
                     raise ProviderResponseUnusable(summary)
                 if category == "policy-refusal":
                     raise ProviderRefusal(summary)
-                summary, repaired = bracket_known_labels(summary, self.known_labels)
-                if repaired:
-                    print(
-                        f"[yellow]Protected names: bracketed {repaired} known "
-                        f"catalogue label(s) the provider left unmarked in "
-                        f"{window.identity}.[/yellow]"
-                    )
-                self.validate_compaction(summary)
+                # Source-window summaries are original-language prose.  A
+                # plain name mention is valid context; only marker syntax the
+                # model actually emits is validated against the catalogue.
+                # Blind cumulative substring repair is deliberately not used:
+                # longest-first matching cannot recognise a longer unextracted
+                # expression and would rewrite accepted history invisibly.
+                repaired = 0
+                validate_summary(
+                    summary, self.known_labels, check_plain_labels=False
+                )
                 estimated = max(1, int(num_tokens_from_text(summary)))
                 if estimated > budget:
                     raise MarkerValidationError(
@@ -3202,6 +3516,7 @@ class MarkerWorkflow:
                     budget=budget,
                     request_sha256=self._source_digest(prompt + feedback),
                     repaired_markers=repaired,
+                    summary_policy=SOURCE_SUMMARY_POLICY,
                 )
                 if persist is not None:
                     try:

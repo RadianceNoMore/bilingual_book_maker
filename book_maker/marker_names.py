@@ -359,7 +359,7 @@ def validate_display_target(value):
     return value
 
 
-def validate_summary(summary, known_labels):
+def validate_summary(summary, known_labels, *, check_plain_labels=True):
     """Validate a marker-preserving compaction summary.
 
     The summary may omit names and reduce occurrence counts.  It must not
@@ -387,13 +387,14 @@ def validate_summary(summary, known_labels):
             + ", ".join(repr(label) for label in sorted(set(unknown)))
         )
     # Strip markers, then look for known labels in the remaining prose.
-    stripped = strip_markers(summary)
-    plain = [label for label in known if label and label in stripped]
-    if plain:
-        raise MarkerError(
-            "Summary mentions catalogue label(s) outside markers: "
-            + ", ".join(repr(label) for label in sorted(plain))
-        )
+    if check_plain_labels:
+        stripped = strip_markers(summary)
+        plain = [label for label in known if label and label in stripped]
+        if plain:
+            raise MarkerError(
+                "Summary mentions catalogue label(s) outside markers: "
+                + ", ".join(repr(label) for label in sorted(plain))
+            )
     return summary
 
 
