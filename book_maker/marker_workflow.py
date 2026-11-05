@@ -1635,8 +1635,8 @@ class MarkerWorkflow:
         return _is_retryable(error)
 
     @staticmethod
-    def _backoff(attempts, stage="Marker paragraph request"):
-        delay = min(2 ** max(0, attempts - 1), 8)
+    def _backoff(attempts, stage="Marker paragraph request", *, base=1, cap=8):
+        delay = min(base * (2 ** max(0, attempts - 1)), cap)
         print(
             f"[yellow]{stage} failed; waiting {delay}s before retry[/yellow]"
         )
@@ -2778,7 +2778,7 @@ class MarkerWorkflow:
 
     def commit_window_summary(
         self, window, summary, *, language, budget,
-        request_sha256=None, validation_version=1,
+        request_sha256=None, validation_version=1, repaired_markers=0,
     ):
         record = self.prepared_window(window)
         if record is None:
@@ -2792,6 +2792,7 @@ class MarkerWorkflow:
             "budget_tokens": budget,
             "estimated_tokens": _tokens(summary),
             "request_sha256": request_sha256,
+            "repaired_markers": int(repaired_markers),
             "input_sha256": self._source_digest(
                 record.get("incoming_summary", "") + "\n" + "\n".join(
                     unit.source for unit in window.units
@@ -2944,6 +2945,7 @@ class MarkerWorkflow:
             SourceWindowError,
             EXTRACTION_OUTPUT_TOKENS,
             EXTRACTION_PROMPT_VERSION,
+            context_only_labels,
             extraction_candidates,
             extraction_request_matches_window,
             prepare_window,
@@ -2981,6 +2983,7 @@ class MarkerWorkflow:
                 "that supports protected-name stages."
             )
         prior = self.source_summary
+        context_only = set(context_only_labels(window, prior))
         candidates = set()
         for failure in self.state.get("diagnostics", {}).get("failures", []):
             if failure.get("stage") != "window-name-extraction":
@@ -2991,9 +2994,12 @@ class MarkerWorkflow:
                  if message.get("role") == "user"), ""
             )
             if extraction_request_matches_window(old_prompt, window):
-                candidates.update(extraction_candidates(failure.get("response", ""), window))
-        # Reuse exact-source candidates from earlier failed runs of this same
-        # window so resume does not forget why the previous extraction failed.
+                candidates.update(
+                    extraction_candidates(failure.get("response", ""), window)
+                )
+        # Reuse exact-source candidates from earlier structurally valid replies
+        # for this same window. They still require an explicit decision in the
+        # final valid reply; a rejected reply never approves its own names.
         limit = 3
         last_error = None
         attempted = 0
@@ -3007,11 +3013,21 @@ class MarkerWorkflow:
                     f"tokens, prior summary { _tokens(prior) if prior else 0 } tokens)."
                 )
                 request_prompt = source_window_prompt(
-                    window, prior, source_language, candidates=candidates, failure=last_error,
+                    window,
+                    prior,
+                    source_language,
+                    candidates=candidates,
+                    context_only=context_only,
+                    failure=last_error,
                 )
                 self.model._protected_last_response = None
                 raw = hook(request_prompt)
-                extracted = validate_extraction(raw, window, candidates)
+                extracted = validate_extraction(
+                    raw,
+                    window,
+                    candidates,
+                    context_only=context_only,
+                )
                 prepared, spans = prepare_window(window, extracted)
                 record = self.commit_window_preparation(
                     window,
@@ -3086,6 +3102,12 @@ class MarkerWorkflow:
         self, window, *, persist=None, source_language=None, budget=1500
     ):
         """Update the cumulative original-language context after all units pass."""
+        from book_maker.marker_names import bracket_known_labels
+        from book_maker.provider_refusal import (
+            ProviderRefusal,
+            ProviderResponseUnusable,
+            classify_provider_reply,
+        )
         from book_maker.source_windows import source_summary_prompt
         from book_maker.translation_quality import _detected_language
         from book_maker.utils import language_code, num_tokens_from_text
@@ -3118,25 +3140,42 @@ class MarkerWorkflow:
             window,
             source_language,
             budget,
+            catalogue_labels=self.known_labels,
         )
         language_name = source_language or "source-window language"
         language_code_expected = language_code(source_language) if source_language else None
-        limit = 3
+        limit = max(1, int(getattr(self.model, "max_chunk_attempts", 5)))
         last_error = None
         self.source_windows_state["summary_pending_window"] = window.identity
         record["status"] = "summary_pending"
         if persist is not None:
             persist()
+        feedback = ""
         for attempt in range(1, limit + 1):
+            responded = False
+            raw = None
             try:
                 print(
                     f"Protected names: updating cumulative original-language summary "
                     f"for {window.identity} (attempt {attempt}/{limit}, "
                     f"budget {budget} estimated tokens)."
                 )
-                raw = hook(prompt, max_tokens=budget)
+                raw = hook(prompt + feedback, max_tokens=budget)
+                responded = True
                 self._protected_last_response = raw
                 summary = raw.strip() if isinstance(raw, str) else ""
+                category, _matched = classify_provider_reply(summary)
+                if category == "provider-error":
+                    raise ProviderResponseUnusable(summary)
+                if category == "policy-refusal":
+                    raise ProviderRefusal(summary)
+                summary, repaired = bracket_known_labels(summary, self.known_labels)
+                if repaired:
+                    print(
+                        f"[yellow]Protected names: bracketed {repaired} known "
+                        f"catalogue label(s) the provider left unmarked in "
+                        f"{window.identity}.[/yellow]"
+                    )
                 self.validate_compaction(summary)
                 estimated = max(1, int(num_tokens_from_text(summary)))
                 if estimated > budget:
@@ -3161,7 +3200,8 @@ class MarkerWorkflow:
                     summary,
                     language=language_name,
                     budget=budget,
-                    request_sha256=self._source_digest(prompt),
+                    request_sha256=self._source_digest(prompt + feedback),
+                    repaired_markers=repaired,
                 )
                 if persist is not None:
                     try:
@@ -3185,17 +3225,36 @@ class MarkerWorkflow:
                 last_error = error
                 self._record_failure(
                     "source-window-summary",
-                    getattr(self.model, "_protected_last_response", "") or "",
+                    raw if isinstance(raw, str) else "",
                     str(error),
+                    window=window,
                 )
                 terminal = (
-                    error.__class__.__name__ == "ProviderRefusal"
+                    isinstance(error, ProviderRefusal)
                     or getattr(self.model, "_fatal_error_detected", False)
                     or not self._retryable(error)
                 )
                 if terminal or attempt == limit:
                     break
-                prompt += (
+                if isinstance(error, ProviderResponseUnusable) or not responded:
+                    # A provider failure carries no draft to correct. Re-ask the
+                    # same prompt after a longer pause; appending validation
+                    # feedback here would only grow a request that never ran.
+                    print(
+                        f"[yellow]Protected names: cumulative summary for "
+                        f"{window.identity} got no usable provider reply on "
+                        f"attempt {attempt}/{limit}: {error}. Retrying the same "
+                        "prompt; accepted translations and the prior summary "
+                        "remain saved.[/yellow]"
+                    )
+                    self._backoff(
+                        attempt,
+                        stage=f"Cumulative summary for {window.identity}",
+                        base=5,
+                        cap=30,
+                    )
+                    continue
+                feedback = (
                     "\n\nThe previous draft failed validation: "
                     + str(error)
                     + f". Return a valid cumulative source-language summary within {budget} estimated tokens."
@@ -3206,14 +3265,14 @@ class MarkerWorkflow:
                     f"{error}. All accepted translations and the prior summary "
                     "remain saved; retrying summary only.[/yellow]"
                 )
-                self._backoff(attempt)
+                self._backoff(attempt, stage=f"Cumulative summary for {window.identity}")
         detail = (
             f"Cumulative source summary failed for {window.identity} after {limit} "
             f"attempts: {last_error}. All accepted units are saved, the incoming "
             f"summary remains authoritative, and no later window has started. "
             "Resume to retry this summary stage only."
         )
-        self._record_failure("source-window-summary-exhausted", "", detail)
+        self._record_failure("source-window-summary-exhausted", "", detail, window=window)
         if persist is not None:
             try:
                 persist()
@@ -3221,7 +3280,5 @@ class MarkerWorkflow:
                 detail += f" The pending-summary recovery write also failed: {error}."
                 raise MarkerValidationError(detail) from error
         if record.get("status") == "complete" and record.get("outgoing_summary"):
-            # A validated summary whose first publication attempt errored may
-            # have committed successfully on this final checkpoint retry.
             return record["outgoing_summary"]
         raise MarkerValidationError(detail) from last_error

@@ -140,6 +140,47 @@ def source_occurrences(source, labels):
     return sorted(found)
 
 
+def bracket_known_labels(text, labels):
+    """Wrap known catalogue labels that appear as plain text.
+
+    Existing markers are preserved exactly and their contents are never
+    matched again.  Matching is longest-first and non-overlapping inside each
+    plain-text segment, so ``御坂美琴`` is bracketed once rather than twice as
+    ``美琴``.  This repairs a summary that drifted from the marker protocol
+    without weakening :func:`validate_summary`: malformed markers still raise,
+    unknown labels still fail, and the repaired text must pass the same
+    validation as any other summary.
+
+    Returns ``(repaired_text, inserted_marker_count)``.
+    """
+    if not isinstance(text, str) or not text:
+        return text, 0
+    known = ordered_labels(labels)
+    if not known:
+        return text, 0
+    # Raises for unclosed or nested marker syntax; such a reply needs a
+    # provider retry rather than a partial local rewrite.
+    markers(text)
+    repaired = []
+    inserted = 0
+    for kind, value in marker_parts(text):
+        if kind == "marker":
+            repaired.append(marker_expression(value))
+            continue
+        occurrences = source_occurrences(value, known)
+        if not occurrences:
+            repaired.append(value)
+            continue
+        cursor = 0
+        for start, end, label in occurrences:
+            repaired.append(value[cursor:start])
+            repaired.append(marker_expression(label))
+            cursor = end
+            inserted += 1
+        repaired.append(value[cursor:])
+    return "".join(repaired), inserted
+
+
 def source_counts(source, labels):
     """Count accepted exact source spans, longest label first."""
     counts = Counter()
