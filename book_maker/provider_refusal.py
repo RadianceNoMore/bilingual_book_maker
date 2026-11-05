@@ -11,6 +11,8 @@ _PROVIDER_FAILURE_MESSAGES = (
     "I'm having a hard time fulfilling your request. "
     "Can I help you with something else instead?",
     "Sorry, something went wrong. Please try your request again.",
+    "I encountered an error doing what you asked. Could you try again?",
+    "I seem to be encountering an error. Can I try something else for you?",
 )
 
 # The marker workflow saves summaries under this fixed introduction; a saved

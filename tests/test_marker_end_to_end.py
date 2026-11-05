@@ -9,6 +9,7 @@ and recovery cleanup.
 import json
 import re
 import zipfile
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1115,3 +1116,61 @@ def test_window_resume_does_not_use_legacy_context_repair_state(tmp_path):
     assert state["session"]["last_summary"] == state["source_windows"]["current_summary"]
     assert state["session"]["seed"] == ""
 
+
+
+def test_second_fresh_run_preserves_the_first_recovery(tmp_path):
+    source = tmp_path / "book.epub"
+    _write_book(source)
+    ongoing = tmp_path / "ongoing"
+
+    FakeMarkerModel.reset(fail_at_call=1)
+    with pytest.raises(SystemExit):
+        _loader(source, resume=False).make_bilingual_book()
+    first = next(ongoing.glob("book-*_bilingual_temp.epub"))
+    first_digest = sha256(first.read_bytes()).hexdigest()
+    first_state = read_state(first)
+    first_run_id = first_state["run"]["run_id"]
+    assert first_state["run"]["mode"] == "fresh"
+
+    FakeMarkerModel.reset(fail_at_call=1)
+    with pytest.raises(SystemExit):
+        _loader(source, resume=False).make_bilingual_book()
+
+    archives = list((ongoing / "archive").glob("*prior*.epub"))
+    assert len(archives) == 1
+    assert sha256(archives[0].read_bytes()).hexdigest() == first_digest
+    current = next(ongoing.glob("book-*_bilingual_temp.epub"))
+    current_state = read_state(current)
+    assert sha256(current.read_bytes()).hexdigest() != first_digest
+    assert current_state["run"]["run_id"] != first_run_id
+    assert current_state["run"]["mode"] == "fresh"
+
+    FakeMarkerModel.reset(fail_at_call=None)
+    _loader(source, resume=True).make_bilingual_book()
+    assert archives[0].exists()
+    assert sha256(archives[0].read_bytes()).hexdigest() == first_digest
+
+
+def test_archive_failure_leaves_the_prior_recovery_untouched(tmp_path, monkeypatch):
+    source = tmp_path / "book.epub"
+    _write_book(source)
+    ongoing = tmp_path / "ongoing"
+
+    FakeMarkerModel.reset(fail_at_call=1)
+    with pytest.raises(SystemExit):
+        _loader(source, resume=False).make_bilingual_book()
+    first = next(ongoing.glob("book-*_bilingual_temp.epub"))
+    first_digest = sha256(first.read_bytes()).hexdigest()
+
+    def fail_copy(*args, **kwargs):
+        raise OSError("simulated archive failure")
+
+    monkeypatch.setattr(
+        "book_maker.loader.epub_loader.shutil.copy2", fail_copy
+    )
+    FakeMarkerModel.reset(fail_at_call=1)
+    with pytest.raises((OSError, SystemExit)):
+        _loader(source, resume=False).make_bilingual_book()
+
+    assert sha256(first.read_bytes()).hexdigest() == first_digest
+    assert not list((ongoing / "archive").glob("*.epub"))

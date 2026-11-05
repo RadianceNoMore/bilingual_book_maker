@@ -5400,6 +5400,7 @@ class EPUBBookLoader(BaseBookLoader):
         marker_state = getattr(self, "_marker_state", None) is not None
         if marker_state:
             path = self._marker_recovery_path()
+            self._preserve_prior_marker_recovery(path)
         else:
             path = self.output_path(f"{name}_bilingual_temp.epub")
         if marker_state:
@@ -5407,6 +5408,17 @@ class EPUBBookLoader(BaseBookLoader):
         else:
             self._write_book(path, book)
         print(f"[bold green]Saved recovery book: {path}[/bold green]")
+        if marker_state:
+            try:
+                checkpoint, journal, durable = self._marker_state._durable_counts()
+                print(
+                    f"Recovery state: {checkpoint} checkpointed + "
+                    f"{journal} journal-only = {durable} distinct durable "
+                    "units. Journal entries promoted into the checkpoint do "
+                    "not change this total."
+                )
+            except Exception:
+                pass
 
     def _marker_settings(self):
         """Safe settings recorded in the embedded run manifest."""
@@ -5442,6 +5454,64 @@ class EPUBBookLoader(BaseBookLoader):
         if directory is None:
             return Path(self.epub_name).parent / "ongoing"
         return Path(directory).parent / "ongoing"
+
+    def _preserve_prior_marker_recovery(self, path):
+        """Keep a foreign recovery file before the canonical path is replaced.
+
+        The canonical path is keyed by source digest, so two fresh runs of the
+        same source collide.  A run must not destroy a file it did not load
+        before its first checkpoint write.  Archives live in an ``archive``
+        subdirectory and are verified by SHA-256 after copying.
+        """
+        path = Path(path)
+        if not path.exists():
+            return None
+        if getattr(self, "_preserved_prior_recovery_path", None) == str(path):
+            return None
+        # Cheap path check first: a normal resume rewrites the bundle it just
+        # loaded, and re-reading the ZIP on every checkpoint would be wasteful.
+        resume_path = getattr(self, "_resume_bundle_path", None)
+        if resume_path is not None and os.path.normcase(
+            os.path.abspath(resume_path)
+        ) == os.path.normcase(os.path.abspath(path)):
+            return None
+        if self._marker_recovery_matches_active_run(path):
+            return None
+        data = path.read_bytes()
+        digest = sha256(data).hexdigest()
+        archive_dir = path.parent / "archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive = archive_dir / f"{path.stem}.prior-{digest[:12]}{path.suffix}"
+        counter = 2
+        while archive.exists():
+            if sha256(archive.read_bytes()).hexdigest() == digest:
+                break
+            archive = archive_dir / (
+                f"{path.stem}.prior-{digest[:12]}-{counter}{path.suffix}"
+            )
+            counter += 1
+        try:
+            if not archive.exists():
+                shutil.copy2(path, archive)
+            archived_digest = sha256(archive.read_bytes()).hexdigest()
+            if archived_digest != digest:
+                raise OSError(
+                    f"archived digest {archived_digest} does not match {digest}"
+                )
+        except Exception as error:
+            print(
+                "[bold red]Fresh run: could not preserve the existing recovery "
+                f"file {path} as {archive}: {error}. The existing file was "
+                "left untouched and no new checkpoint was written.[/bold red]"
+            )
+            raise
+        self._preserved_prior_recovery_path = str(path)
+        print(
+            f"[yellow]Fresh run: preserved previous recovery {path} as "
+            f"{archive} (sha256 {digest[:12]}). Active recovery path: {path}."
+            "[/yellow]"
+        )
+        return archive
 
     def _marker_recovery_path(self):
         """Canonical recovery path for this source identity."""
@@ -5637,6 +5707,9 @@ class EPUBBookLoader(BaseBookLoader):
                 "accumulate_across_chapters", self.accumulate_across_chapters
             )
             state.setdefault("run", {})["effective_settings"] = settings
+            state["run"]["mode"] = "resume"
+            state["run"]["resume"] = True
+            state["run"]["selected_checkpoint"] = str(path)
             workflow = MarkerWorkflow.from_state(
                 self.translate_model, self.epub_name, state, settings=settings
             )
@@ -5658,6 +5731,13 @@ class EPUBBookLoader(BaseBookLoader):
             self.translate_model, self.epub_name, settings=settings
         )
         self._marker_state = workflow
+        workflow.state.setdefault("run", {})["mode"] = "fresh"
+        workflow.state["run"]["resume"] = False
+        workflow.state["run"]["selected_checkpoint"] = None
+        print(
+            f"Fresh run: active recovery path {self._marker_recovery_path()}; "
+            "any existing recovery file there is preserved before replacement."
+        )
         return True
 
     def _marker_context_evidence(self):
@@ -6507,6 +6587,7 @@ class EPUBBookLoader(BaseBookLoader):
         name, _ = os.path.splitext(self.epub_name)
         if getattr(self, "_marker_state", None) is not None:
             temp_path = self._marker_recovery_path()
+            self._preserve_prior_marker_recovery(temp_path)
             self._merge_marker_recovery_localizations()
         else:
             temp_path = self.output_path(f"{name}_bilingual_temp.epub")

@@ -1,0 +1,10 @@
+--- a/gemini-pool/anonymous/server.py
++++ b/gemini-pool/anonymous/server.py
+@@ -175,7 +175,12 @@ def _parse_generation(raw: bytes) -> Generation:
+-    text = "\n\n".join(part for part in candidates.values() if part)
++    # This endpoint is OpenAI single-choice: return one coherent candidate,
++    # never concatenate independent Gemini generations.  Within a candidate,
++    # the longest snapshot was already selected above.
++    text = next((part for part in candidates.values() if part), "")
+     if not text:
+         raise AnonymousUpstreamError("Gemini returned an empty anonymous response")

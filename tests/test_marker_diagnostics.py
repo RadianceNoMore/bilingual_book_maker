@@ -77,7 +77,8 @@ def test_completion_metadata_records_attempt_units_usage_and_cap():
         "window_id": "w000006",
         "chunk": 3,
         "chunk_count": 4,
-        "requested_units": 2,
+        "requested_units": 40,
+        "estimated_output_allowance": 7000,
     }
 
     translator._protected_completion(
@@ -92,6 +93,8 @@ def test_completion_metadata_records_attempt_units_usage_and_cap():
     assert metadata["chunk"] == 3
     assert metadata["chunk_count"] == 4
     assert metadata["requested_units"] == 2
+    assert metadata["original_chunk_units"] == 40
+    assert metadata["estimated_output_allowance"] >= 512
     assert metadata["provider_calls"] == 1
     assert metadata["finish_reason"] == "stop"
     assert metadata["usage"] == {

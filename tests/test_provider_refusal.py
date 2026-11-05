@@ -65,12 +65,20 @@ PROVIDER_BOILERPLATE = (
 OTHER_PROVIDER_BOILERPLATE = (
     "Sorry, something went wrong. Please try your request again."
 )
+TEXT198_PROVIDER_BOILERPLATE = (
+    "I encountered an error doing what you asked. Could you try again?"
+)
+TEXT197_PROVIDER_BOILERPLATE = (
+    "I seem to be encountering an error. Can I try something else for you?"
+)
 SEED_WRAPPER = "You are continuing a translation already in progress."
 
 
 @pytest.mark.parametrize('raw', [
     PROVIDER_BOILERPLATE,
     OTHER_PROVIDER_BOILERPLATE,
+    TEXT198_PROVIDER_BOILERPLATE,
+    TEXT197_PROVIDER_BOILERPLATE,
     PROVIDER_BOILERPLATE.replace(chr(0x27), chr(0x2019)),
     SEED_WRAPPER + "\n\n" + OTHER_PROVIDER_BOILERPLATE,
     "```\n" + PROVIDER_BOILERPLATE + "\n```",
@@ -81,7 +89,10 @@ def test_standalone_provider_failure_is_classified_not_refused(raw):
     category, matched = classify_provider_reply(raw)
     assert category == "provider-error"
     assert matched.replace(chr(0x2019), chr(0x27)) in (
-        PROVIDER_BOILERPLATE, OTHER_PROVIDER_BOILERPLATE,
+        PROVIDER_BOILERPLATE,
+        OTHER_PROVIDER_BOILERPLATE,
+        TEXT198_PROVIDER_BOILERPLATE,
+        TEXT197_PROVIDER_BOILERPLATE,
     )
     # Not an explicit policy refusal: it never raises the terminal path.
     check_provider_refusal(raw)
@@ -101,6 +112,9 @@ def test_provider_error_reply_is_retryable_and_not_dragged_through():
     'instead?</bbm-unit></bbm-response>',
     '{"translation": "Sorry, something went wrong. Please try your request again."}',
     'The novel quotes "I\'m having a hard time fulfilling your request."',
+    '<bbm-response><bbm-unit id="p0">' + TEXT198_PROVIDER_BOILERPLATE + '</bbm-unit></bbm-response>',
+    '{"translation": "' + TEXT197_PROVIDER_BOILERPLATE + '"}',
+    'The character said: "' + TEXT198_PROVIDER_BOILERPLATE + '"',
     'Ordinary translated prose.',
 ])
 def test_quoted_provider_failure_inside_content_stays_ordinary(text):

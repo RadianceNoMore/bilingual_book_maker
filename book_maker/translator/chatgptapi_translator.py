@@ -880,10 +880,27 @@ class ChatGPTAPI(Base):
         started = time.monotonic()
         self._diagnostic_attempt_seq = getattr(self, "_diagnostic_attempt_seq", 0) + 1
         request_context = dict(getattr(self, "_marker_diagnostic_context", None) or {})
-        requested_units = request_context.get("requested_units")
-        if requested_units is None:
-            last_content = messages[-1].get("content", "") if messages else ""
-            requested_units = len(re.findall(r'<bbm-unit id="', last_content))
+        last_content = messages[-1].get("content", "") if messages else ""
+        payload_units = len(re.findall(r'<bbm-unit id="', last_content))
+        original_chunk_units = request_context.get("requested_units")
+        if stage == "paragraph-response" and payload_units:
+            # The actual retry subset, not the original chunk, defines this
+            # request.  The loader context is retained separately.
+            requested_units = payload_units
+            from ..utils import num_tokens_from_text
+
+            estimated_output_allowance = max(
+                512, int(num_tokens_from_text(last_content))
+            )
+        else:
+            requested_units = (
+                original_chunk_units
+                if original_chunk_units is not None
+                else payload_units
+            )
+            estimated_output_allowance = request_context.get(
+                "estimated_output_allowance"
+            )
         attempt_id = f"{stage}-{self._diagnostic_attempt_seq:05d}"
         provider_calls = 0
         last_request = None
@@ -957,9 +974,8 @@ class ChatGPTAPI(Base):
                 "chunk": request_context.get("chunk"),
                 "chunk_count": request_context.get("chunk_count"),
                 "requested_units": requested_units,
-                "estimated_output_allowance": request_context.get(
-                    "estimated_output_allowance"
-                ),
+                "original_chunk_units": original_chunk_units,
+                "estimated_output_allowance": estimated_output_allowance,
                 "provider_calls": provider_calls,
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "finish_reason": getattr(choice, 'finish_reason', None),

@@ -1,0 +1,35 @@
+{
+  "preserved_at": "2026-11-05T12:08:33.340410+00:00",
+  "source_path": "C:\\Users\\Tina_\\Documents\\PlayingWithRepo\\bilingual_book_maker-window-names\\ongoing\\超炮，某不科学的恋爱喜剧-c00de9cde483_bilingual_temp.epub",
+  "copy_path": "C:\\Users\\Tina_\\Documents\\PlayingWithRepo\\bilingual_book_maker-window-names\\diagnostics\\text198\\recovery-preserved.epub",
+  "source_sha256": "edd1675648491946195342a97fa234ce59d884e8b780c3032449b5e986e317b4",
+  "copy_sha256": "edd1675648491946195342a97fa234ce59d884e8b780c3032449b5e986e317b4",
+  "size_bytes": 1533846,
+  "run": {
+    "run_id": "4453886b-ea10-4258-bed7-86a77ae1e7d0",
+    "mode": null,
+    "resume": null,
+    "status": "partial",
+    "source_sha256": "c00de9cde483c36f4ab429cab120d460fdaa0473ae47fabedac858ac076afa02"
+  },
+  "windows": [
+    {
+      "window_id": "w000001",
+      "status": "complete",
+      "units": 164,
+      "accepted": 164,
+      "outgoing_summary": true
+    },
+    {
+      "window_id": "w000002",
+      "status": "translating",
+      "units": 132,
+      "accepted": 117,
+      "outgoing_summary": false
+    }
+  ],
+  "checkpoint_ids": 246,
+  "journal_ids": 35,
+  "additional_journal_ids": 35,
+  "distinct_durable_ids": 281
+}

@@ -142,6 +142,68 @@ class _PendingParagraph:
     last_failure: list | None = None
 
 
+@dataclass
+class _ChunkRequestStats:
+    """One chunk invocation's request accounting.
+
+    ``logical_requests`` counts calls to ``send``; ``paragraph_participations``
+    counts units carried across those requests.  Provider calls and usage are
+    reported as partial when any response omits them, never silently as zero.
+    """
+
+    logical_requests: int = 0
+    paragraph_participations: int = 0
+    provider_calls: int = 0
+    provider_calls_partial: bool = False
+    usage_total: int = 0
+    usage_seen: bool = False
+    usage_partial: bool = False
+
+    def record_send(self, units):
+        self.logical_requests += 1
+        self.paragraph_participations += max(0, int(units))
+
+    def record_response(self, metadata):
+        metadata = metadata or {}
+        calls = metadata.get("provider_calls")
+        if isinstance(calls, int) and not isinstance(calls, bool):
+            self.provider_calls += calls
+        else:
+            self.provider_calls_partial = True
+        usage = metadata.get("usage")
+        if isinstance(usage, dict):
+            total = usage.get("total_tokens")
+            if total is None and usage.get("prompt_tokens") is not None:
+                total = int(usage.get("prompt_tokens") or 0) + int(
+                    usage.get("completion_tokens") or 0
+                )
+            if isinstance(total, (int, float)) and not isinstance(total, bool):
+                self.usage_total += int(total)
+                self.usage_seen = True
+            else:
+                self.usage_partial = True
+        else:
+            self.usage_partial = True
+
+    def record_missing_response(self):
+        self.provider_calls_partial = True
+        self.usage_partial = True
+
+    def provider_calls_text(self):
+        if self.provider_calls_partial:
+            if self.provider_calls:
+                return f"at least {self.provider_calls} (partial)"
+            return "unavailable"
+        return str(self.provider_calls)
+
+    def usage_text(self):
+        if self.usage_partial:
+            if self.usage_seen:
+                return f"{self.usage_total} observed (partial)"
+            return "unavailable"
+        return str(self.usage_total)
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -1523,21 +1585,22 @@ class MarkerWorkflow:
         session = getattr(self.model, "session", None)
         request_history = deepcopy(session.messages()) if session is not None else []
         chunk_token_budget = sum(_tokens(item.source) for item in items)
-        provider_calls_total = 0
-        usage_total = None
+        stats = _ChunkRequestStats()
+        provider_error_streak = 0
         last_raw = None
         while True:
             outstanding = [item for item in items if item.accepted is None]
             if not outstanding:
                 break
             eligible = [item for item in outstanding if item.attempts < limit]
-            if len(eligible) != len(outstanding):
-                self._exhaust_recovery(outstanding, limit, last_raw)
+            if not eligible:
+                self._exhaust_recovery(outstanding, limit, last_raw, stats=stats)
             subset = self._next_retry_batch(
                 eligible, len(items), chunk_token_budget
             )
             for item in subset:
                 item.attempts += 1
+            stats.record_send(len(subset))
             request_ids = [provider_id(item) for item in subset]
             _ids, payload = paragraph_request(
                 [item.source for item in subset], request_ids
@@ -1592,27 +1655,42 @@ class MarkerWorkflow:
                         getattr(self.model, "_protected_last_response", "") or "",
                         str(error),
                     )
+                    self._report_interrupted(
+                        outstanding, limit, stats, "explicit provider refusal"
+                    )
                     print(
                         "[bold red]Protected names: provider refusal "
                         f"[explicit-refusal]: {error}. This is terminal; no "
                         "retry is attempted.[/bold red]"
                     )
                     raise
+                response_metadata = getattr(
+                    self.model, "_protected_response_metadata", None
+                )
+                if response_metadata:
+                    stats.record_response(response_metadata)
+                else:
+                    stats.record_missing_response()
                 if getattr(self.model, "_fatal_error_detected", False) or not self._retryable(error):
                     self._record_failure("paragraph-transport", "", str(error))
+                    self._report_interrupted(
+                        outstanding, limit, stats, f"terminal transport error: {error}"
+                    )
                     raise
                 self._record_failure("paragraph-transport", "", str(error))
                 for item in subset:
                     item.last_stage = "transport"
                     item.last_category = "transport-error"
                     item.last_error = f"transport failure: {error}"
-                if all(item.attempts >= limit for item in outstanding):
+                eligible_now = [
+                    item for item in outstanding if item.attempts < limit
+                ]
+                if not eligible_now:
                     self._exhaust_recovery(
                         outstanding,
                         limit,
                         None,
-                        provider_calls=provider_calls_total,
-                        usage=usage_total,
+                        stats=stats,
                     )
                 self._backoff(max(item.attempts for item in subset))
                 continue
@@ -1620,20 +1698,14 @@ class MarkerWorkflow:
             response_metadata = getattr(
                 self.model, "_protected_response_metadata", None
             ) or {}
-            provider_calls_total += int(response_metadata.get("provider_calls") or 0)
-            response_usage = response_metadata.get("usage")
-            if isinstance(response_usage, dict):
-                total = response_usage.get("total_tokens")
-                if isinstance(total, (int, float)):
-                    usage_total = (usage_total or 0) + int(total)
-                elif response_usage.get("prompt_tokens") is not None:
-                    usage_total = (usage_total or 0) + int(
-                        response_usage.get("prompt_tokens") or 0
-                    ) + int(response_usage.get("completion_tokens") or 0)
+            stats.record_response(response_metadata)
             accepted = []
             failed = []
             category, matched = classify_provider_category(raw)
+            if category != "provider-error":
+                provider_error_streak = 0
             if category == "provider-error":
+                provider_error_streak += 1
                 # A whole provider boilerplate reply has nothing to parse:
                 # every outstanding ID stays pending, accepted IDs stay
                 # committed, and this send counts once against its IDs.
@@ -1651,6 +1723,13 @@ class MarkerWorkflow:
                     item.last_category = "provider-boilerplate"
                     item.last_error = reason
                     failed.append(item)
+                if any(item.attempts < limit for item in outstanding):
+                    self._backoff(
+                        provider_error_streak,
+                        stage="Provider boilerplate reply",
+                        base=2,
+                        cap=30,
+                    )
             else:
                 reply = parse_paragraph_reply(raw, request_ids)
                 if reply.framing_error:
@@ -1787,23 +1866,23 @@ class MarkerWorkflow:
                         "failures are recorded in the recovery diagnostics."
                     )
             done = len(items) - len(outstanding)
-            if all(item.attempts >= limit for item in outstanding):
+            eligible = [item for item in outstanding if item.attempts < limit]
+            if not eligible:
                 print(
                     f"[yellow]{done}/{len(items)} accepted; retry budget "
                     f"exhausted for {len(outstanding)} paragraph(s)[/yellow]"
                 )
-                self._exhaust_recovery(
-                    outstanding,
-                    limit,
-                    raw,
-                    provider_calls=provider_calls_total,
-                    usage=usage_total,
-                )
-            next_attempt = max(item.attempts for item in outstanding) + 1
+                self._exhaust_recovery(outstanding, limit, raw, stats=stats)
+            next_subset = self._next_retry_batch(
+                eligible, len(items), chunk_token_budget
+            )
+            next_attempt = max(item.attempts for item in next_subset) + 1
+            exhausted_count = len(outstanding) - len(eligible)
             print(
-                f"[yellow]{done}/{len(items)} accepted; retrying "
-                f"{len(outstanding)} failed paragraph(s) together, attempt "
-                f"{next_attempt}/{limit}[/yellow]"
+                f"[yellow]{done}/{len(items)} accepted; next request attempt "
+                f"{next_attempt}/{limit} carries {len(next_subset)} unit(s); "
+                f"{len(eligible)} eligible, {exhausted_count} exhausted, "
+                f"{len(outstanding)} pending.[/yellow]"
             )
         translations = [item.accepted for item in items]
         # Journal entries stay until the caller's checkpoint snapshot proves
@@ -1895,11 +1974,39 @@ class MarkerWorkflow:
             len(checkpoint_ids | journal_ids),
         )
 
-    def _exhaust_recovery(
-        self, outstanding, limit, raw, *, provider_calls=None, usage=None
-    ):
+    def _report_interrupted(self, outstanding, limit, stats, reason):
+        """Terminal failures still have to explain which work never got a send."""
+        pending = [item for item in outstanding if item.accepted is None]
+        eligible = [item for item in pending if item.attempts < limit]
+        exhausted = len(pending) - len(eligible)
+        print(
+            "[bold red]Protected names: stopping because of a terminal "
+            f"provider condition ({reason}). {len(pending)} unit(s) pending: "
+            f"{len(eligible)} still had retry budget, {exhausted} were already "
+            "exhausted. Those are not the same as every paragraph using "
+            f"{limit} attempts.[/bold red]"
+        )
+        if eligible:
+            print(
+                "[yellow]Protected names: eligible work interrupted before its "
+                "next send: "
+                + ", ".join(item.identity for item in eligible[:12])
+                + ("..." if len(eligible) > 12 else "")
+                + ".[/yellow]"
+            )
+        if stats is not None:
+            print(
+                "[yellow]Protected names: this chunk made "
+                f"{stats.logical_requests} logical request(s) carrying "
+                f"{stats.paragraph_participations} paragraph participation(s); "
+                f"observed provider calls: {stats.provider_calls_text()}; "
+                f"usage: {stats.usage_text()}.[/yellow]"
+            )
+
+    def _exhaust_recovery(self, outstanding, limit, raw, *, stats=None):
         details = "; ".join(
             f"{item.identity} (paragraph {item.index}, "
+            f"{item.attempts}/{limit} attempts, "
             f"{item.last_stage or 'unclassified'}): "
             f"{item.last_error or 'failed validation'}"
             for item in outstanding
@@ -1918,7 +2025,9 @@ class MarkerWorkflow:
             trace = trace_location()
         except Exception:
             trace = None
-        logical_attempts = sum(item.attempts for item in outstanding)
+        if stats is None:
+            stats = _ChunkRequestStats()
+            stats.record_missing_response()
         print(
             "[bold red]Protected names: stopping in window "
             f"{window_id} {chunk_label}. "
@@ -1929,20 +2038,13 @@ class MarkerWorkflow:
             f"{journal_count} additional unique journal entr"
             f"{'y' if journal_count == 1 else 'ies'}, "
             f"{durable_count} total durable unit(s). "
-            f"Logical paragraph attempts this batch: {logical_attempts} "
-            "(name-extraction and cumulative-summary requests are separate "
-            "stages and are not counted here)"
-            + (
-                f"; observed provider calls: {provider_calls}"
-                if provider_calls is not None
-                else "; provider-call count unavailable"
-            )
-            + (
-                f"; usage: {usage} tokens"
-                if usage is not None
-                else "; token usage unavailable"
-            )
-            + f". Trace: {trace or 'disabled (set BBM_MARKER_TRACE_DIR to enable)'}."
+            f"This chunk invocation made {stats.logical_requests} logical "
+            f"request(s), carrying {stats.paragraph_participations} paragraph "
+            f"participation(s); observed provider calls: "
+            f"{stats.provider_calls_text()}; usage: {stats.usage_text()}. "
+            "Name-extraction and cumulative-summary requests are separate "
+            "stages and are not counted here."
+            + f" Trace: {trace or 'disabled (set BBM_MARKER_TRACE_DIR to enable)'}."
             "[/bold red]"
         )
         print(
@@ -1954,7 +2056,11 @@ class MarkerWorkflow:
         self._record_failure(
             "paragraph-exhausted",
             raw or "",
-            f"budget {limit} exhausted for: {details}",
+            f"budget {limit} exhausted for: {details}. "
+            f"requests={stats.logical_requests}, "
+            f"participations={stats.paragraph_participations}, "
+            f"provider_calls={stats.provider_calls_text()}, "
+            f"usage={stats.usage_text()}",
         )
         raise MarkerValidationError(
             f"Marker paragraph recovery exhausted after {limit} request(s) "

@@ -1,0 +1,71 @@
+{
+  "source": "text198 decoded client-boundary shapes",
+  "provider_calls": 0,
+  "cases": [
+    {
+      "case": "restart_inside_text",
+      "requested": [
+        "u003"
+      ],
+      "accepted": {},
+      "errors": {
+        "u003": "duplicate or ambiguous bbm-unit id"
+      },
+      "unknown": [],
+      "diagnostics": [],
+      "framing_error": "paragraph response is not well-formed XML: Premature end of data in tag bbm-unit line 2, line 4, column 16 (<string>, line 4)",
+      "framing": {
+        "bbm_response_openings": 2,
+        "bbm_response_closings": 1,
+        "multiple_roots": true
+      },
+      "ambiguous_unit_rejected": true,
+      "safe_sibling_preserved": null
+    },
+    {
+      "case": "restart_inside_attribute",
+      "requested": [
+        "u003"
+      ],
+      "accepted": {},
+      "errors": {
+        "u003": "ambiguous bbm-unit framing"
+      },
+      "unknown": [],
+      "diagnostics": [
+        "an unfinished or malformed bbm-unit opening made one or more otherwise complete-looking units ambiguous; those units remain pending and are never accepted by position"
+      ],
+      "framing_error": "paragraph response is not well-formed XML: Unescaped '<' not allowed in attributes values, line 2, column 18 (<string>, line 2)",
+      "framing": {
+        "bbm_response_openings": 2,
+        "bbm_response_closings": 1,
+        "multiple_roots": true
+      },
+      "ambiguous_unit_rejected": true,
+      "safe_sibling_preserved": null
+    },
+    {
+      "case": "restart_with_safe_sibling",
+      "requested": [
+        "u003",
+        "u004"
+      ],
+      "accepted": {
+        "u004": "Safe sibling."
+      },
+      "errors": {
+        "u003": "duplicate or ambiguous bbm-unit id"
+      },
+      "unknown": [],
+      "diagnostics": [],
+      "framing_error": "paragraph response is not well-formed XML: Premature end of data in tag bbm-unit line 3, line 5, column 16 (<string>, line 5)",
+      "framing": {
+        "bbm_response_openings": 2,
+        "bbm_response_closings": 1,
+        "multiple_roots": true
+      },
+      "ambiguous_unit_rejected": true,
+      "safe_sibling_preserved": true
+    }
+  ]
+}
