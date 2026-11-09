@@ -92,6 +92,8 @@ class MarkdownBookLoader(BaseBookLoader):
 
         self.resume = resume
         self.bin_path = f"{Path(md_name).parent}/.{Path(md_name).stem}.temp.bin"
+        from book_maker.run_state import prepare_book_run
+        prepare_book_run(md_name, self.resume)
         if self.resume:
             self.load_state()
 

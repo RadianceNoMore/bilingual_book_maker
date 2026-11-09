@@ -2,6 +2,7 @@ import inspect
 import posixpath
 import re
 import zipfile
+from contextlib import contextmanager
 
 from rich import print
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from lxml import etree
 from tenacity import Retrying, retry, retry_if_exception, wait_exponential, stop_after_attempt
 
 from book_maker.translator.base_translator import BatchMismatch
-from book_maker.translation_quality import validate_translation_texts
+from book_maker.translation_quality import UntranslatedTextError, validate_translation_texts
 from book_maker.utils import language_code
 
 logging.basicConfig(level=logging.WARNING)
@@ -77,6 +78,8 @@ def _accepts_context(translate):
 
 def _is_retryable(error):
     """Whether waiting could plausibly change the answer."""
+    if getattr(error, 'retryable', True) is False:
+        return False
     if isinstance(error, FATAL_ERROR_TYPES):
         return False
     return type(error).__name__ not in FATAL_ERROR_NAMES
@@ -559,7 +562,28 @@ url_pattern = r"(http[s]?://|www\.)+(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0
 _URL_RE = re.compile(url_pattern)
 _URL_TAIL_RE = re.compile(r".*" + url_pattern + r"$")
 
-DEFAULT_CHUNK_ATTEMPTS = 5
+DEFAULT_CHUNK_ATTEMPTS = 10
+
+UNTRANSLATED_RETRY_FEEDBACK = (
+    "The previous response copied source text or left it untranslated. "
+    "Translate the entire chunk into the requested target language. Return only "
+    "the translations, without repeating the source. Preserve the required "
+    "separators, paragraph count, IDs, and protected markers."
+)
+
+
+@contextmanager
+def untranslated_retry_feedback(model, active=True):
+    previous = getattr(model, "_translation_retry_feedback", None)
+    if active:
+        model._translation_retry_feedback = UNTRANSLATED_RETRY_FEEDBACK
+    try:
+        yield
+    finally:
+        if previous is None:
+            model.__dict__.pop("_translation_retry_feedback", None)
+        else:
+            model._translation_retry_feedback = previous
 
 
 def translate_list_or_singles(
@@ -595,15 +619,27 @@ def translate_list_or_singles(
                 result,
                 language or getattr(model, "language", None),
                 source_language or getattr(model, "source_lang", None),
+                marker_text=getattr(model, "_marker_state", None) is not None,
             )
         return result
 
-    def run():
+    needs_language_feedback = False
+
+    def run_once():
         if attempt is not None:
             return checked(attempt())
         if hasattr(model, "translate_list"):
             return checked(model.translate_list(texts))
         return checked([model.translate(text) for text in texts])
+
+    def run():
+        nonlocal needs_language_feedback
+        with untranslated_retry_feedback(model, needs_language_feedback):
+            try:
+                return run_once()
+            except UntranslatedTextError:
+                needs_language_feedback = True
+                raise
 
     if singles:
         try:

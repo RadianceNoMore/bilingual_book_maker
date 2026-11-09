@@ -8,8 +8,8 @@ Three things are pinned here, and each has a way of failing quietly.
    Sending it everywhere would be paid for on every request in session mode
    (the fresh tail message is never cached); sending it nowhere would drop the
    pin without a word.
-3. The derived (session-learned) glossary is a runtime thing. It rides in
-   requests and in `<book>_handoff.md`, it never touches the operator's own
+3. The derived (session-learned) glossary is review evidence. It stays out of
+   requests and lives in `<book>_handoff.md`, it never touches the operator's own
    file, and `options.glossary_path` — what the translation metadata stamp records —
    stays exactly what was typed.
 """
@@ -371,7 +371,7 @@ class TestLearningFromTheHandoff:
         asked = [c for c in _tails(t) if handoff_prompt()[:40] in c]
         assert asked and RENDERINGS_MARKER in asked[-1]
 
-    def test_the_learned_terms_reach_the_next_window(self, tmp_path):
+    def test_the_learned_terms_are_review_only_in_the_next_window(self, tmp_path):
         t = _session(
             ["译文", HANDOFF_WITH_TERMS, "译文"], handoff_path=tmp_path / "h.md"
         )
@@ -379,7 +379,8 @@ class TestLearningFromTheHandoff:
         t.get_translation("Boxer pulled the cart")
         # the translation request, not the compact turn that follows it: with
         # this budget every unit rolls the window over
-        assert "拳击手" in _unit_request(t, "Boxer pulled the cart")
+        assert "拳击手" not in _unit_request(t, "Boxer pulled the cart")
+        assert t.learned.lookup("Boxer").translation == "拳击手"
 
     def test_the_report_records_them_for_the_operator(self, tmp_path):
         path = tmp_path / "h.md"
@@ -562,14 +563,8 @@ class TestTheStripperRemovesExactlyWhatWasParsed:
         assert text.count("Boxer → 拳击手") == 1
         assert text.count("Clover → 三叶草") == 1
 
-    def test_the_next_window_carries_each_term_once(self, tmp_path):
-        """One copy, and it comes from the unit's own block.
-
-        It used to be the seed's copy that this counted, and the risk was a
-        second one left in the prose. Since 260913 the seed carries no terms
-        at all, so the question is the same and the answer moved: a unit that
-        names a term gets it once, from `prompt_block`.
-        """
+    def test_the_next_window_does_not_enforce_unreviewed_terms(self, tmp_path):
+        """Neither the seed nor the unit prompt promotes learned pairs."""
         t = _session(
             ["译文", HANDOFF_WITHOUT_TAGS, "译文"], handoff_path=tmp_path / "h.md"
         )
@@ -578,7 +573,8 @@ class TestTheStripperRemovesExactlyWhatWasParsed:
         request = "\n".join(
             m["content"] for m in t.sent[-1]["messages"] if m.get("content")
         )
-        assert request.count("Boxer → 拳击手") == 1
+        assert request.count("Boxer → 拳击手") == 0
+        assert t.learned.lookup("Boxer") is not None
 
     def test_a_unit_naming_nothing_carries_no_terms_at_all(self, tmp_path):
         t = _session(

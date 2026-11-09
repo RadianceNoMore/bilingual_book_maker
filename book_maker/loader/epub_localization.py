@@ -8,6 +8,11 @@ from urllib.parse import unquote, urlsplit
 from bs4 import BeautifulSoup
 from ebooklib import ITEM_DOCUMENT, epub
 
+from book_maker.marker_bundle import (
+    LOCALIZATION_KEY_ATTRIBUTE,
+    BundleError,
+)
+
 
 def toc_entries(toc):
     for entry in toc:
@@ -77,31 +82,55 @@ def _replace_link_text(link, value):
 
 def _sync_links(
     soup, file_name, translated_titles, translated_labels, single,
-    allow_target_fallback=False,
+    allow_target_fallback=False, binding_keys=None, binding_values=None,
 ):
-    """Copy approved navigation labels into links in any XHTML document."""
+    """Copy approved navigation labels into links in any XHTML document.
+
+    ``binding_keys`` maps a source identity to the stable localization key
+    that will survive serialization.  Links that were localized in an earlier
+    pass keep that key in an attribute, so a second pass after catalogue
+    changes does not have to infer identity from the now-colliding display
+    text.
+    """
     changed = False
     for link in soup.find_all("a", href=True):
         key = target(link["href"], file_name)
-        current = link.get_text(" ", strip=True)
-        pair = next(
-            (
-                (source, translated)
-                for (label_key, source), translated in translated_labels.items()
-                if label_key == key
-                and current in (
-                    source, translated, f"{source} {translated}",
-                    bilingual(source, translated, single),
-                )
-            ),
-            None,
-        )
-        if pair is None and allow_target_fallback:
-            pair = translated_titles.get(key)
+        if key is None:
+            continue
+        tagged = link.get(LOCALIZATION_KEY_ATTRIBUTE)
+        pair = None
+        stable_key = None
+        if tagged and binding_values and tagged in binding_values:
+            pair = binding_values[tagged]
+            stable_key = tagged
+        else:
+            current = link.get_text(" ", strip=True)
+            pair = next(
+                (
+                    (source, translated)
+                    for (label_key, source), translated in translated_labels.items()
+                    if label_key == key
+                    and current in (
+                        source, translated, f"{source} {translated}",
+                        bilingual(source, translated, single),
+                    )
+                ),
+                None,
+            )
+            if pair is not None:
+                stable_key = (binding_keys or {}).get((key, pair[0]))
+            if pair is None and allow_target_fallback:
+                pair = translated_titles.get(key)
+                if pair is not None:
+                    stable_key = (binding_keys or {}).get((key, pair[0]))
         if pair and pair[1]:
             label = bilingual(*pair, single)
+            current = link.get_text(" ", strip=True)
             if current != label:
                 _replace_link_text(link, label)
+                changed = True
+            if stable_key and link.get(LOCALIZATION_KEY_ATTRIBUTE) != stable_key:
+                link[LOCALIZATION_KEY_ATTRIBUTE] = stable_key
                 changed = True
     return changed
 
@@ -142,7 +171,8 @@ def collect_titles(book, plans):
 
 def sync_documents(
     book, translated_titles, single, language, nav_labels=None, translated_files=None,
-    translated_labels=None,
+    translated_labels=None, binding_keys=None, nav_binding_keys=None,
+    binding_values=None,
 ):
     """Sync approved labels into XHTML TOC links and EPUB navigation."""
     by_file = {}
@@ -155,7 +185,8 @@ def sync_documents(
             continue
         soup = BeautifulSoup(item.content, "html.parser")
         changed = _sync_links(
-            soup, item.file_name, translated_titles, translated_labels or {}, single
+            soup, item.file_name, translated_titles, translated_labels or {}, single,
+            binding_keys=binding_keys, binding_values=binding_values,
         )
         label = bilingual(*pair, single) if pair else ""
         if label:
@@ -191,25 +222,42 @@ def sync_documents(
         soup = BeautifulSoup(item.content, "html.parser")
         changed = _sync_links(
             soup, item.file_name, translated_titles, translated_labels or {}, single,
-            allow_target_fallback=True,
+            allow_target_fallback=True, binding_keys=binding_keys,
+            binding_values=binding_values,
         )
         for node in soup.select("nav h2, nav li > span"):
-            current = node.get_text(" ", strip=True)
-            pair = next(
-                (
-                    (source, translated)
-                    for (file_name, source), translated in (nav_labels or {}).items()
-                    if file_name == item.file_name
-                    and current in (
-                        source, translated, f"{source} {translated}",
-                        bilingual(source, translated, single),
+            tagged = node.get(LOCALIZATION_KEY_ATTRIBUTE)
+            pair = None
+            stable_key = None
+            if tagged and binding_values and tagged in binding_values:
+                pair = binding_values[tagged]
+                stable_key = tagged
+            else:
+                current = node.get_text(" ", strip=True)
+                pair = next(
+                    (
+                        (source, translated)
+                        for (file_name, source), translated in (nav_labels or {}).items()
+                        if file_name == item.file_name
+                        and current in (
+                            source, translated, f"{source} {translated}",
+                            bilingual(source, translated, single),
+                        )
+                    ),
+                    None,
+                )
+                if pair is not None:
+                    stable_key = (nav_binding_keys or {}).get(
+                        (item.file_name, pair[0])
                     )
-                ),
-                None,
-            )
             if pair and not node.find("a"):
-                node.string = bilingual(*pair, single)
-                changed = True
+                label = bilingual(*pair, single)
+                if node.get_text(" ", strip=True) != label:
+                    node.string = label
+                    changed = True
+                if stable_key and node.get(LOCALIZATION_KEY_ATTRIBUTE) != stable_key:
+                    node[LOCALIZATION_KEY_ATTRIBUTE] = stable_key
+                    changed = True
         if changed and soup.title and book.title:
             soup.title.string = book.title
         if changed and soup.html and language and single:
@@ -239,3 +287,91 @@ def set_dc_values(book, name, translations, single):
     book.metadata[dc][name] = updated
     if name == "title":
         book.title = updated[0][0]
+
+
+def apply_serialization_tokens(book, bindings):
+    """Put opaque binding tokens into a disposable serialization copy.
+
+    Returns a callable that restores every mutated value.  Display
+    localization decisions are already complete; these tokens carry explicit
+    source identities through ebooklib's generated nav/NCX/OPF output.
+    """
+    if bindings is None:
+        return None
+    bindings.prepare_nonce_for_book(book)
+    originals = []
+
+    def tokenize_tagged(soup):
+        changed = False
+        for element in soup.find_all(
+            attrs={LOCALIZATION_KEY_ATTRIBUTE: True}
+        ):
+            key = element.get(LOCALIZATION_KEY_ATTRIBUTE)
+            binding_id = bindings.id_for_key(key)
+            if binding_id is None:
+                raise BundleError(
+                    "A localized element has no source binding; refusing to "
+                    f"serialize {key!r}"
+                )
+            _replace_link_text(element, bindings.token(binding_id))
+            del element[LOCALIZATION_KEY_ATTRIBUTE]
+            changed = True
+        return changed
+
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        is_nav = isinstance(item, epub.EpubNav)
+        file_binding = bindings.file.get(item.file_name) if not is_nav else None
+        title_binding = (
+            bindings.dc.get(("title", 0)) if is_nav else file_binding
+        )
+        if (
+            title_binding is None
+            and file_binding is None
+            and not item.content
+        ):
+            continue
+        soup = BeautifulSoup(item.content, "html.parser")
+        changed = tokenize_tagged(soup)
+        if title_binding is not None:
+            token = bindings.token(title_binding)
+            if soup.title is not None:
+                soup.title.string = token
+                changed = True
+        if file_binding is not None:
+            token = bindings.token(file_binding)
+            for meta in soup.find_all("meta", attrs={"name": "npkr-title"}):
+                meta["content"] = token
+                changed = True
+        if changed:
+            originals.append((item, "content", item.content))
+            item.content = soup.encode("utf-8")
+
+    for node in toc_entries(book.toc):
+        binding_id = bindings.toc.get(id(node))
+        if binding_id is None:
+            continue
+        originals.append((node, "title", getattr(node, "title", None)))
+        node.title = bindings.token(binding_id)
+
+    dc = epub.NAMESPACES["DC"]
+    for (name, index), binding_id in bindings.dc.items():
+        entries = book.metadata.get(dc, {}).get(name, [])
+        if index >= len(entries):
+            continue
+        originals.append((entries, index, entries[index]))
+        value, attrs = entries[index]
+        entries[index] = (bindings.token(binding_id), attrs)
+
+    title_binding = bindings.dc.get(("title", 0))
+    if title_binding is not None:
+        originals.append((book, "title", book.title))
+        book.title = bindings.token(title_binding)
+
+    def restore():
+        for target_object, attribute, value in reversed(originals):
+            if isinstance(target_object, list):
+                target_object[attribute] = value
+            else:
+                setattr(target_object, attribute, value)
+
+    return restore

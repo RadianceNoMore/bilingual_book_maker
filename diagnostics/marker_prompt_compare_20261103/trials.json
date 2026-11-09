@@ -1,0 +1,489 @@
+[
+  {
+    "label": "trial-1",
+    "variant": "baseline",
+    "order": 1,
+    "rounds": [],
+    "attempts": {
+      "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": 2,
+      "epub:25:chap_25.xhtml:35:dead30795cbebbec": 2,
+      "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": 2,
+      "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": 2,
+      "epub:25:chap_25.xhtml:53:c41373e498ae14f1": 2
+    },
+    "completed": true,
+    "replayed": true
+  },
+  {
+    "label": "trial-2",
+    "variant": "reinforced",
+    "order": 2,
+    "rounds": [],
+    "attempts": {
+      "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": 5,
+      "epub:25:chap_25.xhtml:35:dead30795cbebbec": 5,
+      "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": 4,
+      "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": 5,
+      "epub:25:chap_25.xhtml:53:c41373e498ae14f1": 4
+    },
+    "completed": false,
+    "replayed": true
+  },
+  {
+    "label": "trial-3",
+    "variant": "baseline",
+    "order": 3,
+    "rounds": [],
+    "attempts": {
+      "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": 2,
+      "epub:25:chap_25.xhtml:35:dead30795cbebbec": 5,
+      "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": 5,
+      "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": 5,
+      "epub:25:chap_25.xhtml:53:c41373e498ae14f1": 5
+    },
+    "completed": true,
+    "replayed": true
+  },
+  {
+    "label": "trial-4",
+    "variant": "reinforced",
+    "order": 4,
+    "rounds": [
+      {
+        "phase": "repair",
+        "latency_s": 12.91,
+        "accepted": [],
+        "failed": {
+          "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": {
+            "id": "epub:25:chap_25.xhtml:31:8d150b9b1713c93a",
+            "stage": "validation",
+            "error": "Paragraph 12: marker counts exceed exact source availability. 'his': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '“想不出来。”一色摊手，“感觉就是情报完全不足啊，我身上完全没有什么值得女王探究的东西，展示出来的能力也是乱七八糟的没什么可研究性，其他方面的价值我觉得也不至于得到女王这么大宽容。”'",
+            "label_details": [
+              {
+                "label": "his",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:35:dead30795cbebbec": {
+            "id": "epub:25:chap_25.xhtml:35:dead30795cbebbec",
+            "stage": "validation",
+            "error": "Paragraph 16: marker counts exceed exact source availability. 'his': expected 0, received 2; 'He': expected 0, received 2. Markers were added for text not present as an exact source label. Source: '一色本来想移开屁股展现绅士风范，但是闻着鼻尖萦绕的淡淡蜂蜜一般的香甜气息，有些心旷神怡呢，软软的身子，很贴心。舍不得离开了呢。'",
+            "label_details": [
+              {
+                "label": "his",
+                "requested": 2,
+                "available": 0,
+                "kind": "pronoun-marker"
+              },
+              {
+                "label": "He",
+                "requested": 2,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": {
+            "id": "epub:25:chap_25.xhtml:36:332c12cc085d8e1c",
+            "stage": "validation",
+            "error": "Paragraph 17: marker counts exceed exact source availability. 'him': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '不过身边少女眼睛里闪烁的似乎带有侵略性的光芒让一色有些紧张。'",
+            "label_details": [
+              {
+                "label": "him",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": {
+            "id": "epub:25:chap_25.xhtml:41:29fa0ef66c35376c",
+            "stage": "validation",
+            "error": "Paragraph 22: marker counts exceed exact source availability. 'him': expected 0, received 1; 'he': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '呱！搅、搅什么哇？一色蒙圈了，食蜂操祈对自己的好感度异常的高啊，自己人机托管的时间里到底发生了什么？'",
+            "label_details": [
+              {
+                "label": "him",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              },
+              {
+                "label": "he",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:53:c41373e498ae14f1": {
+            "id": "epub:25:chap_25.xhtml:53:c41373e498ae14f1",
+            "stage": "validation",
+            "error": "Paragraph 34: marker counts exceed exact source availability. 'his': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '一色扭动前进了一下，脑袋顶到了柔软的肚子。'",
+            "label_details": [
+              {
+                "label": "his",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "phase": "repair",
+        "latency_s": 13.77,
+        "accepted": [],
+        "failed": {
+          "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": {
+            "id": "epub:25:chap_25.xhtml:31:8d150b9b1713c93a",
+            "stage": "parse",
+            "error": "duplicate or ambiguous bbm-unit id",
+            "label_details": null
+          },
+          "epub:25:chap_25.xhtml:35:dead30795cbebbec": {
+            "id": "epub:25:chap_25.xhtml:35:dead30795cbebbec",
+            "stage": "parse",
+            "error": "duplicate or ambiguous bbm-unit id",
+            "label_details": null
+          },
+          "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": {
+            "id": "epub:25:chap_25.xhtml:36:332c12cc085d8e1c",
+            "stage": "parse",
+            "error": "duplicate or ambiguous bbm-unit id",
+            "label_details": null
+          },
+          "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": {
+            "id": "epub:25:chap_25.xhtml:41:29fa0ef66c35376c",
+            "stage": "parse",
+            "error": "duplicate or ambiguous bbm-unit id",
+            "label_details": null
+          },
+          "epub:25:chap_25.xhtml:53:c41373e498ae14f1": {
+            "id": "epub:25:chap_25.xhtml:53:c41373e498ae14f1",
+            "stage": "parse",
+            "error": "duplicate or ambiguous bbm-unit id",
+            "label_details": null
+          }
+        }
+      },
+      {
+        "phase": "repair",
+        "latency_s": 13.8,
+        "accepted": [
+          "epub:25:chap_25.xhtml:41:29fa0ef66c35376c",
+          "epub:25:chap_25.xhtml:53:c41373e498ae14f1"
+        ],
+        "failed": {
+          "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": {
+            "id": "epub:25:chap_25.xhtml:31:8d150b9b1713c93a",
+            "stage": "validation",
+            "error": "Paragraph 12: marker counts exceed exact source availability. '一色': expected 1, received 2. Source: '“想不出来。”一色摊手，“感觉就是情报完全不足啊，我身上完全没有什么值得女王探究的东西，展示出来的能力也是乱七八糟的没什么可研究性，其他方面的价值我觉得也不至于得到女王这么大宽容。”'",
+            "label_details": [
+              {
+                "label": "一色",
+                "requested": 2,
+                "available": 1,
+                "kind": "excess"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:35:dead30795cbebbec": {
+            "id": "epub:25:chap_25.xhtml:35:dead30795cbebbec",
+            "stage": "validation",
+            "error": "Paragraph 16: marker counts exceed exact source availability. '一色': expected 1, received 2. Source: '一色本来想移开屁股展现绅士风范，但是闻着鼻尖萦绕的淡淡蜂蜜一般的香甜气息，有些心旷神怡呢，软软的身子，很贴心。舍不得离开了呢。'",
+            "label_details": [
+              {
+                "label": "一色",
+                "requested": 2,
+                "available": 1,
+                "kind": "excess"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": {
+            "id": "epub:25:chap_25.xhtml:36:332c12cc085d8e1c",
+            "stage": "validation",
+            "error": "Paragraph 17: marker counts exceed exact source availability. '一色': expected 1, received 2. Source: '不过身边少女眼睛里闪烁的似乎带有侵略性的光芒让一色有些紧张。'",
+            "label_details": [
+              {
+                "label": "一色",
+                "requested": 2,
+                "available": 1,
+                "kind": "excess"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "phase": "repair",
+        "latency_s": 7.54,
+        "accepted": [],
+        "failed": {
+          "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": {
+            "id": "epub:25:chap_25.xhtml:31:8d150b9b1713c93a",
+            "stage": "validation",
+            "error": "Paragraph 12: marker counts exceed exact source availability. 'their': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '“想不出来。”一色摊手，“感觉就是情报完全不足啊，我身上完全没有什么值得女王探究的东西，展示出来的能力也是乱七八糟的没什么可研究性，其他方面的价值我觉得也不至于得到女王这么大宽容。”'",
+            "label_details": [
+              {
+                "label": "their",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:35:dead30795cbebbec": {
+            "id": "epub:25:chap_25.xhtml:35:dead30795cbebbec",
+            "stage": "validation",
+            "error": "Paragraph 16: marker counts exceed exact source availability. 'their': expected 0, received 1; 'They': expected 0, received 1; 'they': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '一色本来想移开屁股展现绅士风范，但是闻着鼻尖萦绕的淡淡蜂蜜一般的香甜气息，有些心旷神怡呢，软软的身子，很贴心。舍不得离开了呢。'",
+            "label_details": [
+              {
+                "label": "their",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              },
+              {
+                "label": "They",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              },
+              {
+                "label": "they",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": {
+            "id": "epub:25:chap_25.xhtml:36:332c12cc085d8e1c",
+            "stage": "validation",
+            "error": "Paragraph 17: marker counts exceed exact source availability. 'them': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '不过身边少女眼睛里闪烁的似乎带有侵略性的光芒让一色有些紧张。'",
+            "label_details": [
+              {
+                "label": "them",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "phase": "exhausted",
+        "outstanding": [
+          "epub:25:chap_25.xhtml:31:8d150b9b1713c93a",
+          "epub:25:chap_25.xhtml:35:dead30795cbebbec",
+          "epub:25:chap_25.xhtml:36:332c12cc085d8e1c"
+        ]
+      }
+    ],
+    "attempts": {
+      "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": 5,
+      "epub:25:chap_25.xhtml:35:dead30795cbebbec": 5,
+      "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": 5,
+      "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": 4,
+      "epub:25:chap_25.xhtml:53:c41373e498ae14f1": 4
+    },
+    "completed": false
+  },
+  {
+    "label": "trial-5",
+    "variant": "baseline",
+    "order": 5,
+    "rounds": [
+      {
+        "phase": "repair",
+        "latency_s": 25.16,
+        "accepted": [],
+        "failed": {
+          "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": {
+            "id": "epub:25:chap_25.xhtml:31:8d150b9b1713c93a",
+            "stage": "validation",
+            "error": "Paragraph 12: marker counts exceed exact source availability. '她的': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '“想不出来。”一色摊手，“感觉就是情报完全不足啊，我身上完全没有什么值得女王探究的东西，展示出来的能力也是乱七八糟的没什么可研究性，其他方面的价值我觉得也不至于得到女王这么大宽容。”'",
+            "label_details": [
+              {
+                "label": "她的",
+                "requested": 1,
+                "available": 0,
+                "kind": "absent"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:35:dead30795cbebbec": {
+            "id": "epub:25:chap_25.xhtml:35:dead30795cbebbec",
+            "stage": "validation",
+            "error": "Paragraph 16: marker counts exceed exact source availability. 'him': expected 0, received 1; 'she': expected 0, received 1; '他的': expected 0, received 3. Markers were added for text not present as an exact source label. Source: '一色本来想移开屁股展现绅士风范，但是闻着鼻尖萦绕的淡淡蜂蜜一般的香甜气息，有些心旷神怡呢，软软的身子，很贴心。舍不得离开了呢。'",
+            "label_details": [
+              {
+                "label": "him",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              },
+              {
+                "label": "she",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              },
+              {
+                "label": "他的",
+                "requested": 3,
+                "available": 0,
+                "kind": "absent"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": {
+            "id": "epub:25:chap_25.xhtml:36:332c12cc085d8e1c",
+            "stage": "validation",
+            "error": "Paragraph 17: marker counts exceed exact source availability. 'him': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '不过身边少女眼睛里闪烁的似乎带有侵略性的光芒让一色有些紧张。'",
+            "label_details": [
+              {
+                "label": "him",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": {
+            "id": "epub:25:chap_25.xhtml:41:29fa0ef66c35376c",
+            "stage": "validation",
+            "error": "Paragraph 22: marker counts exceed exact source availability. 'him': expected 0, received 1; 'he': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '呱！搅、搅什么哇？一色蒙圈了，食蜂操祈对自己的好感度异常的高啊，自己人机托管的时间里到底发生了什么？'",
+            "label_details": [
+              {
+                "label": "him",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              },
+              {
+                "label": "he",
+                "requested": 1,
+                "available": 0,
+                "kind": "pronoun-marker"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:53:c41373e498ae14f1": {
+            "id": "epub:25:chap_25.xhtml:53:c41373e498ae14f1",
+            "stage": "validation",
+            "error": "Paragraph 34: marker counts exceed exact source availability. '他的': expected 0, received 1. Markers were added for text not present as an exact source label. Source: '一色扭动前进了一下，脑袋顶到了柔软的肚子。'",
+            "label_details": [
+              {
+                "label": "他的",
+                "requested": 1,
+                "available": 0,
+                "kind": "absent"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "phase": "repair",
+        "latency_s": 17.89,
+        "accepted": [
+          "epub:25:chap_25.xhtml:53:c41373e498ae14f1"
+        ],
+        "failed": {
+          "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": {
+            "id": "epub:25:chap_25.xhtml:31:8d150b9b1713c93a",
+            "stage": "validation",
+            "error": "Paragraph 12: marker counts exceed exact source availability. '一色': expected 1, received 2. Source: '“想不出来。”一色摊手，“感觉就是情报完全不足啊，我身上完全没有什么值得女王探究的东西，展示出来的能力也是乱七八糟的没什么可研究性，其他方面的价值我觉得也不至于得到女王这么大宽容。”'",
+            "label_details": [
+              {
+                "label": "一色",
+                "requested": 2,
+                "available": 1,
+                "kind": "excess"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:35:dead30795cbebbec": {
+            "id": "epub:25:chap_25.xhtml:35:dead30795cbebbec",
+            "stage": "validation",
+            "error": "Paragraph 16: marker counts exceed exact source availability. '一色': expected 1, received 3. Source: '一色本来想移开屁股展现绅士风范，但是闻着鼻尖萦绕的淡淡蜂蜜一般的香甜气息，有些心旷神怡呢，软软的身子，很贴心。舍不得离开了呢。'",
+            "label_details": [
+              {
+                "label": "一色",
+                "requested": 3,
+                "available": 1,
+                "kind": "excess"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": {
+            "id": "epub:25:chap_25.xhtml:36:332c12cc085d8e1c",
+            "stage": "validation",
+            "error": "Paragraph 17: marker counts exceed exact source availability. '一色': expected 1, received 2. Source: '不过身边少女眼睛里闪烁的似乎带有侵略性的光芒让一色有些紧张。'",
+            "label_details": [
+              {
+                "label": "一色",
+                "requested": 2,
+                "available": 1,
+                "kind": "excess"
+              }
+            ]
+          },
+          "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": {
+            "id": "epub:25:chap_25.xhtml:41:29fa0ef66c35376c",
+            "stage": "validation",
+            "error": "Paragraph 22: marker counts exceed exact source availability. '一色': expected 1, received 3. Source: '呱！搅、搅什么哇？一色蒙圈了，食蜂操祈对自己的好感度异常的高啊，自己人机托管的时间里到底发生了什么？'",
+            "label_details": [
+              {
+                "label": "一色",
+                "requested": 3,
+                "available": 1,
+                "kind": "excess"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "phase": "repair",
+        "latency_s": 24.33,
+        "accepted": [
+          "epub:25:chap_25.xhtml:31:8d150b9b1713c93a",
+          "epub:25:chap_25.xhtml:35:dead30795cbebbec",
+          "epub:25:chap_25.xhtml:36:332c12cc085d8e1c",
+          "epub:25:chap_25.xhtml:41:29fa0ef66c35376c"
+        ],
+        "failed": {}
+      }
+    ],
+    "attempts": {
+      "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": 4,
+      "epub:25:chap_25.xhtml:35:dead30795cbebbec": 4,
+      "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": 4,
+      "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": 4,
+      "epub:25:chap_25.xhtml:53:c41373e498ae14f1": 3
+    },
+    "completed": true
+  },
+  {
+    "label": "trial-6",
+    "variant": "reinforced",
+    "order": 6,
+    "rounds": [],
+    "attempts": {
+      "epub:25:chap_25.xhtml:31:8d150b9b1713c93a": 1,
+      "epub:25:chap_25.xhtml:35:dead30795cbebbec": 1,
+      "epub:25:chap_25.xhtml:36:332c12cc085d8e1c": 1,
+      "epub:25:chap_25.xhtml:41:29fa0ef66c35376c": 1,
+      "epub:25:chap_25.xhtml:53:c41373e498ae14f1": 1
+    },
+    "completed": true
+  }
+]

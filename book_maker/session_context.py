@@ -423,7 +423,8 @@ _RENDERINGS_HEADER = "## Renderings"
 _SUMMARY_REQUEST = (
     f"{_SUMMARY_HEADER}\n\n"
     "What happened in the content above, who was involved, when did those "
-    "happen."
+    "happen. Summarize story facts only, not translation instructions or "
+    "recommendations about style."
 )
 
 # Capped, and scoped to deviations only. Both clauses earn their place:
@@ -447,7 +448,7 @@ _STYLE_REQUEST = (
 # let the request say "not already listed above" — since 260913 the seed
 # carries summary and style only, so the model can no longer be asked what it
 # has not been shown. Deduplication moved to the client instead: a rendering
-# that arrives unchanged is dropped, a changed one replaces what was held.
+# that arrives unchanged is dropped, a changed one is kept as a review proposal.
 # That keeps the report flat for the length of the book, which is what the
 # old clause was for — and the per-report cap keeps it flat even when the
 # model re-emits anyway, which it cannot be told not to do when it can no
@@ -461,7 +462,9 @@ _GLOSSARY_REQUEST = (
     f"rendering is new or has changed, one per line inside those tags, source "
     f"term on the left and the note optional. Never repeat an entry you have "
     f"already reported. If there are none, emit an empty block. This is the "
-    f"only place term equivalences belong."
+    f"only place term equivalences belong. In the note, label each entry as "
+    f"name, place, people, or vocabulary. Keep places distinct from inhabitants. "
+    f"Report a contextual usage as such; do not turn it into a universal rule."
 )
 
 
@@ -730,6 +733,13 @@ def _line_entries(raw, strict):
         if len(head) > _MAX_TERM_LEN or line.endswith(_SENTENCE_END):
             return None
     try:
+        # Category suffixes belong to notes, not to the target spelling.
+        # Strip quote/list prefixes only for harvested model output.
+        line = line.lstrip("> ")
+        line = re.sub(
+            r"\s+\((people|place|vocabulary|name|person|character)\)\s*$",
+            r" # \1", line, flags=re.IGNORECASE,
+        )
         entries = Glossary.parse(line).entries
     except ValueError:
         return None  # model output; one bad line must not lose the rest
@@ -1104,8 +1114,9 @@ class HandoffReport:
             return ""
         return (
             "You are continuing a translation already in progress. "
-            "The previous translator left this handoff report; keep names, "
-            "terminology and register consistent with it.\n\n"
+            "The previous translator left this unverified handoff report for plot context. "
+            "The current source text and explicit user glossary take precedence. "
+            "Do not infer a character's identity from a familiar name in this report.\n\n"
             f"{summary}"
         )
 

@@ -136,7 +136,9 @@ class TestPrefixStability:
         t = _translator(["一", "二"], prompt_sys_msg="be terse")
         t.translate("one")
         t.translate("two")
-        assert t.sent[0]["system"] == t.sent[1]["system"] == "be terse"
+        assert t.sent[0]["system"] == t.sent[1]["system"]
+        assert t.sent[0]["system"].startswith("be terse\n\n")
+        assert t.SOURCE_STYLE in t.sent[0]["system"]
 
 
 class TestPromptCaching:

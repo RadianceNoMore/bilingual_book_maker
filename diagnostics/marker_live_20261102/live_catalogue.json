@@ -1,0 +1,50 @@
+{
+  "御坂美琴": {
+    "key": "d11b3e9d68e9036f23cda1e42ec1ce93626e879e1868fb0fdb2417ebb7ea261a",
+    "label": "御坂美琴",
+    "count": 3,
+    "paragraphs": [
+      1
+    ],
+    "references": [
+      {
+        "job_id": "epub:0:one.xhtml:0:7be54585956a9a35"
+      },
+      {
+        "job_id": "epub:0:one.xhtml:1:4babe308a812b7b4"
+      },
+      {
+        "job_id": "epub:0:one.xhtml:2:cb384b7031138cb2"
+      }
+    ],
+    "contexts": [
+      "御坂美琴走进教室，看见白井黑子正在整理书包。",
+      "“早上好，”御坂美琴说，“今天的课要迟到了。”",
+      "白井黑子笑了笑，把课本递给御坂美琴。"
+    ],
+    "target": "Mikoto Misaka",
+    "mapping_status": "mapped"
+  },
+  "白井黑子": {
+    "key": "e12234832f15b5a9d0d6d65c410efe7cb47de3246d0075278169620363a39c7a",
+    "label": "白井黑子",
+    "count": 2,
+    "paragraphs": [
+      1
+    ],
+    "references": [
+      {
+        "job_id": "epub:0:one.xhtml:0:7be54585956a9a35"
+      },
+      {
+        "job_id": "epub:0:one.xhtml:2:cb384b7031138cb2"
+      }
+    ],
+    "contexts": [
+      "御坂美琴走进教室，看见白井黑子正在整理书包。",
+      "白井黑子笑了笑，把课本递给御坂美琴。"
+    ],
+    "target": "Kuroko Shirai",
+    "mapping_status": "mapped"
+  }
+}

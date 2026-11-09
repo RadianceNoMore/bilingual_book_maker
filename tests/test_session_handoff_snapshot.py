@@ -645,13 +645,13 @@ class TestTheHarvestIsBounded:
         out = capsys.readouterr().out
         assert out.count("line(s) ignored") == 1
 
-    def test_a_replacement_inside_the_cap_still_replaces(self, tmp_path):
+    def test_a_proposed_replacement_inside_the_cap_keeps_the_original(self, tmp_path):
         first = "They walked.\n\n<renderings>\nBoxer → 拳击手\n</renderings>\n"
         second = "They rested.\n\n<renderings>\nBoxer → 鲍克瑟\n</renderings>\n"
         t = _translator(["译文", first, "译文", second], glossary_auto=True)
         t.get_translation("Boxer pulled. " + "a" * 6000)
         t.get_translation("Boxer rested. " + "b" * 6000)
-        assert t.learned.lookup("Boxer").translation == "鲍克瑟"
+        assert t.learned.lookup("Boxer").translation == "拳击手"
 
     def test_compact_prompt_states_the_per_report_cap(self):
         """The prompt says how many renderings one report may carry, and
@@ -959,10 +959,9 @@ class TestTheCompactPromptShowsATemplate:
         assert "## Renderings" not in prompt
 
 
-class TestARelearnedTermReplaces:
-    def test_relearned_term_replaces_old_rendering(self, tmp_path):
-        """This window has read more of the book than the last one, so its
-        reading wins — in memory and in the snapshot, once each."""
+class TestARelearnedTermIsReviewed:
+    def test_relearned_term_retains_original_and_journals_proposal(self, tmp_path):
+        """A later model proposal must not silently change an established name."""
         path = tmp_path / "book_handoff.md"
         first = "They walked.\n\n<renderings>\nBoxer → 拳击手\n</renderings>\n"
         second = "They rested.\n\n<renderings>\nBoxer → 鲍克瑟\n</renderings>\n"
@@ -972,11 +971,14 @@ class TestARelearnedTermReplaces:
         t.get_translation("Boxer pulled. " + "a" * 6000)
         t.get_translation("Boxer rested. " + "b" * 6000)
 
-        assert t.learned.lookup("Boxer").translation == "鲍克瑟"
+        assert t.learned.lookup("Boxer").translation == "拳击手"
         assert len(t.learned) == 1
         body = path.read_text(encoding="utf-8")
-        assert body.count("Boxer → 鲍克瑟") == 1
-        assert "拳击手" not in body
+        assert body.count("Boxer → 拳击手") == 1
+        assert "鲍克瑟" not in body
+        import json
+        events = [json.loads(line) for line in (tmp_path / "book_glossary_review.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert any(e["event"] == "conflict" and e["proposed"] == "鲍克瑟" for e in events)
 
     def test_a_pin_beats_both_readings_in_memory_and_on_disk(self, tmp_path):
         """The artifact half of `test_a_pin_is_never_overwritten_by_what_was
@@ -1051,66 +1053,35 @@ def _system_carrying(t, unit):
     raise AssertionError(f"no request carried {unit[:30]!r}")
 
 
-class TestTheObservedStyleStandsUntilItIsReplaced:
-    """A style the run observed has to reach the model, not just the file.
-
-    codex review 260913 (P2). Before the reply was split into sections the
-    observed style rode the seed inside the summary, so the next window read
-    it; splitting it out sent it to the snapshot and nowhere else, which made
-    the whole `## Style` request write-only. It goes back on the standing
-    channel — where a style belongs (owner-pinned decision 8) — and the
-    operator's own `--prompt` style still outranks it absolutely.
-    """
-
-    def test_a_reported_style_reaches_the_next_window(self):
+class TestHandoffsCannotReinforceStyleDrift:
+    def test_a_reported_style_does_not_reach_the_next_window(self):
         t = _translator(["译文", _styled_report("Clipped, no adverbs."), "译文"])
         t.get_translation(LONG_UNIT)
         t.get_translation("Clover watched.")
-        assert "Clipped, no adverbs." in _system_carrying(t, "Clover watched.")
+        system = _system_carrying(t, "Clover watched.")
+        assert "Clipped, no adverbs." not in system
+        assert t.SOURCE_STYLE in system
 
-    def test_the_newest_report_replaces_the_previous_one(self):
-        """Snapshot semantics, like the glossary's: the model has read more
-        of the book than it had last window, so its newest description wins
-        outright rather than accumulating next to the old one."""
-        t = _translator(
-            [
-                "译文",
-                _styled_report("Clipped, no adverbs."),
-                "译文",
-                _styled_report("Formal, long sentences."),
-                "译文",
-            ]
-        )
+    def test_later_reports_cannot_change_the_standing_style(self):
+        t = _translator([
+            "译文", _styled_report("Clipped, no adverbs."),
+            "译文", _styled_report("Formal, long sentences."), "译文",
+        ])
         t.get_translation(LONG_UNIT)
         t.get_translation(LONG_UNIT)
         t.get_translation("Clover watched.")
         system = _system_carrying(t, "Clover watched.")
-        assert "Formal, long sentences." in system
+        assert t.SOURCE_STYLE in system
+        assert "Formal, long sentences." not in system
         assert "Clipped" not in system
 
-    def test_a_report_with_no_style_leaves_the_standing_one_alone(self):
-        """Same as an empty renderings block: "nothing to add" is not "forget
-        what you knew". A window the model describes in prose only must not
-        silently drop the register the book has been translated in."""
-        t = _translator(
-            [
-                "译文",
-                _styled_report("Clipped, no adverbs."),
-                "译文",
-                "They reached the barn.",
-                "译文",
-            ]
-        )
+    def test_compaction_does_not_request_a_style(self):
+        t = _translator(["译文", "They reached the barn."])
         t.get_translation(LONG_UNIT)
-        t.get_translation(LONG_UNIT)
-        t.get_translation("Clover watched.")
-        assert "Clipped, no adverbs." in _system_carrying(t, "Clover watched.")
+        prompt = t.sent[-1]["messages"][-1]["content"]
+        assert "## Style" not in prompt
 
     def test_a_fixed_style_is_never_replaced_by_a_reply(self):
-        """The structural guarantee. A standing instruction the model can
-        erode a window at a time would not be standing — and with a fixed
-        style the compact turn is not even asked for one, so anything that
-        looks like a style section is just more of the summary."""
         t = _translator(
             ["译文", _styled_report("Clipped, no adverbs."), "译文"],
             style_note="Formal and old-fashioned.",
@@ -1122,22 +1093,12 @@ class TestTheObservedStyleStandsUntilItIsReplaced:
         assert "Clipped, no adverbs." not in system
         assert t.handoff_style == ""
 
-    def test_the_snapshot_records_the_style_that_is_standing(self, tmp_path):
+    def test_snapshot_records_stable_source_policy(self, tmp_path):
         path = tmp_path / "book_handoff.md"
-        t = _translator(
-            [
-                "译文",
-                _styled_report("Clipped, no adverbs."),
-                "译文",
-                "They reached the barn.",
-            ],
-            handoff_path=path,
-        )
+        t = _translator(["译文", _styled_report("Clipped, no adverbs.")], handoff_path=path)
         t.get_translation(LONG_UNIT)
-        t.get_translation(LONG_UNIT)
-        # the second report mentioned no style, so the file keeps the one the
-        # run is actually translating under rather than emptying out
-        assert "Clipped, no adverbs." in path.read_text(encoding="utf-8")
+        assert t.SOURCE_STYLE in path.read_text(encoding="utf-8")
+        assert "Clipped, no adverbs." not in path.read_text(encoding="utf-8")
 
 
 # ------------------------------------------------------------------- resume
@@ -1197,7 +1158,7 @@ class TestResumeReadsTheSnapshotBack:
         assert not off.learned
         assert "Napoleon took the farm." in off.session.messages()[0]["content"]
 
-    def test_resume_puts_the_style_back_on_the_standing_channel(self, tmp_path):
+    def test_resume_discards_model_style_from_old_snapshots(self, tmp_path):
         """The snapshot's style is restored the way its summary is — session
         plus `--resume`, never gated on `--glossary-auto`. A style is how the
         book reads, not a derived vocabulary an operator opts into, and the
@@ -1205,8 +1166,10 @@ class TestResumeReadsTheSnapshotBack:
         path = _snapshot(tmp_path / "book_handoff.md", style_note="Clipped.")
         t = _translator(handoff_path=path)
         _loader(translate_model=t)._restore_session_handoff()
-        assert t.handoff_style == "Clipped."
-        assert "Clipped." in t.style_section()
+        assert t.handoff_style == ""
+        assert "Clipped." not in t.style_section()
+        assert t.SOURCE_STYLE in t.style_section()
+        assert "Clipped." not in t.session.messages()[0]["content"]
 
     def test_a_fixed_style_outranks_the_restored_one(self, tmp_path):
         path = _snapshot(tmp_path / "book_handoff.md", style_note="Clipped.")

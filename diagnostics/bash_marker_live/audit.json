@@ -1,0 +1,36 @@
+[
+  {
+    "sample": 1,
+    "stray_dollar_signs": [
+      {
+        "unit": 14,
+        "translation": "\"Geez.\" ${美琴} grabbed ${一色}'s hand and sighed, \"No matter what, ${黑子}$ that girl has definitely been way too high-strung lately. She seems to be racking her brains over that 'Void Burst' case.\""
+      }
+    ],
+    "units_with_name_count_changes": [],
+    "empty_translations": [],
+    "chinese_outside_markers": []
+  },
+  {
+    "sample": 2,
+    "stray_dollar_signs": [],
+    "units_with_name_count_changes": [],
+    "empty_translations": [],
+    "chinese_outside_markers": []
+  },
+  {
+    "sample": 3,
+    "stray_dollar_signs": [],
+    "units_with_name_count_changes": [],
+    "empty_translations": [],
+    "chinese_outside_markers": [
+      {
+        "unit": 27,
+        "fragments": [
+          "的原石"
+        ],
+        "translation": "\"的原石 abilities are really incredible,\" ${美琴} remarked with a sigh."
+      }
+    ]
+  }
+]

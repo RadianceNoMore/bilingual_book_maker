@@ -439,7 +439,7 @@ class Codex(Base):
         """
         prompt = handoff_prompt(
             with_glossary=self.glossary_auto_on,
-            with_style=not self.style_note,
+            with_style=False,
         )
         try:
             report_text = self._run_turn(self._thread_id, prompt)
@@ -531,7 +531,7 @@ class Codex(Base):
             # Pinned terms belong to this unit, so they ride with it rather
             # than with the thread instructions, which every later turn would
             # re-read.
-            block = self.glossary.prompt_block(text) if self.glossary else ""
+            block = self.glossary_prompt_block(text)
             payload = self._unit_text(text)
             payload = f"{block}\n\n{payload}" if block else payload
 

@@ -1,0 +1,177 @@
+{
+  "reference_person_place_occurrences": 51,
+  "premarked_person_place_occurrences": 49,
+  "self_marked_person_place_occurrences": 51,
+  "after_manual_alias_matching_counts_agree": true,
+  "source_spelling_expansions": 27,
+  "source_spelling_expansions_by_paragraph": [
+    {
+      "unit": 3,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 6,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 8,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 9,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 10,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 10,
+      "source_name": "食蜂",
+      "returned_name": "食蜂操祈",
+      "occurrences": 1
+    },
+    {
+      "unit": 11,
+      "source_name": "操祈",
+      "returned_name": "食蜂操祈",
+      "occurrences": 1
+    },
+    {
+      "unit": 13,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 14,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 15,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 16,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 17,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 18,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 19,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 19,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 20,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 21,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 24,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 2
+    },
+    {
+      "unit": 25,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    },
+    {
+      "unit": 26,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 2
+    },
+    {
+      "unit": 26,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 2
+    },
+    {
+      "unit": 27,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 29,
+      "source_name": "美琴",
+      "returned_name": "御坂美琴",
+      "occurrences": 1
+    },
+    {
+      "unit": 30,
+      "source_name": "黑子",
+      "returned_name": "白井黑子",
+      "occurrences": 1
+    }
+  ],
+  "other_self_selected_markers": [
+    "净化",
+    "原石",
+    "Level3"
+  ],
+  "source_names": {
+    "黑子": 14,
+    "一色": 19,
+    "美琴": 11,
+    "食蜂": 1,
+    "操祈": 1,
+    "学园之舍": 1,
+    "常盘台中学": 2,
+    "御坂美琴": 1,
+    "食蜂操祈": 1
+  },
+  "returned_person_place_names": {
+    "白井黑子": 14,
+    "一色": 19,
+    "御坂美琴": 12,
+    "食蜂操祈": 3,
+    "学园之舍": 1,
+    "常盘台中学": 2
+  }
+}

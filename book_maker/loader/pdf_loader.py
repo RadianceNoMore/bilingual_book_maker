@@ -236,6 +236,8 @@ class PDFBookLoader(BaseBookLoader):
 
         self.resume = resume
         self.bin_path = f"{Path(pdf_name).parent}/.{Path(pdf_name).stem}.temp.bin"
+        from book_maker.run_state import prepare_book_run
+        prepare_book_run(pdf_name, self.resume)
         if self.resume:
             self.load_state()
 

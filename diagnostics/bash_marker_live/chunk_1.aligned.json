@@ -1,0 +1,242 @@
+[
+  {
+    "unit": 1,
+    "source": "“没什么。总之从头开始对遗留物品进行检查吧。”",
+    "marked_source": "“没什么。总之从头开始对遗留物品进行检查吧。”",
+    "translation": "\"It's nothing. Anyway, let's start inspecting the leftover items from the beginning.\""
+  },
+  {
+    "unit": 2,
+    "source": "*",
+    "marked_source": "*",
+    "translation": "*"
+  },
+  {
+    "unit": 3,
+    "source": "“你是说最近黑子有些奇怪？”走在前面的一色拎着包回头看向美琴问道。",
+    "marked_source": "“你是说最近${黑子}有些奇怪？”走在前面的${一色}拎着包回头看向${美琴}问道。",
+    "translation": "\"Are you saying that ${黑子} has been acting a bit strange lately?\" walking ahead, ${一色} carried her bag, turned her head back, and asked ${美琴}."
+  },
+  {
+    "unit": 4,
+    "source": "“嗯姆，怎么说呢？”美琴挠了挠脸颊思考着措辞，“大概是在风纪委员的工作中投入过多的精力了吧？而且最近对我几乎没什么……冒犯？”",
+    "marked_source": "“嗯姆，怎么说呢？”${美琴}挠了挠脸颊思考着措辞，“大概是在风纪委员的工作中投入过多的精力了吧？而且最近对我几乎没什么……冒犯？”",
+    "translation": "\"Hmm, how should I put it?\" ${美琴} scratched her cheek as she searched for the right words, \"Probably that she's been putting too much energy into her Judgment work? And lately, she's barely been... making advances on me?\""
+  },
+  {
+    "unit": 5,
+    "source": "“冒犯？”",
+    "marked_source": "“冒犯？”",
+    "translation": "\"Advances?\""
+  },
+  {
+    "unit": 6,
+    "source": "“你看以前黑子不是老是手脚不老实嘛？最近却异常的乖巧很有分寸，不如说跟最开始相比有分寸过头了呢。”",
+    "marked_source": "“你看以前${黑子}不是老是手脚不老实嘛？最近却异常的乖巧很有分寸，不如说跟最开始相比有分寸过头了呢。”",
+    "translation": "\"You see, ${黑子} used to always be a bit handsy, right? But lately, she's been unusually well-behaved and tactful—or rather, compared to how she was at the very beginning, she's being way too tactful.\""
+  },
+  {
+    "unit": 7,
+    "source": "“哦~”一色停下脚步分析着，“那就可以说是对美琴有些冷淡了？”",
+    "marked_source": "“哦~”${一色}停下脚步分析着，“那就可以说是对${美琴}有些冷淡了？”",
+    "translation": "\"Oh~\" ${一色} paused her steps to analyze, \"So that means she's being a bit cold toward ${美琴}?\""
+  },
+  {
+    "unit": 8,
+    "source": "“冷淡？不至于吧……”美琴恍然摸了摸后脑勺说道，“嘛，还真有点那个意思了。”",
+    "marked_source": "“冷淡？不至于吧……”${美琴}恍然摸了摸后脑勺说道，“嘛，还真有点那个意思了。”",
+    "translation": "\"Cold? I wouldn't go that far...\" ${美琴} instinctively touched the back of her head and said, \"Well, actually, it is kind of like that.\""
+  },
+  {
+    "unit": 9,
+    "source": "“还对工作投入过多精力，就像在逃避什么一样。”一色点点脑袋，一脸笃定地下结论，“这大概就是情场失意便投身事业罢？”",
+    "marked_source": "“还对工作投入过多精力，就像在逃避什么一样。”${一色}点点脑袋，一脸笃定地下结论，“这大概就是情场失意便投身事业罢？”",
+    "translation": "\"And putting too much energy into work, like she's running away from something.\" ${一色} nodded, drawing a confident conclusion with a serious expression, \"Could this be what they call throwing oneself into a career when things go wrong in love?\""
+  },
+  {
+    "unit": 10,
+    "source": "“什、什么？”美琴惊讶地眨眨眼睛。",
+    "marked_source": "“什、什么？”${美琴}惊讶地眨眨眼睛。",
+    "translation": "\"W-What?\" ${美琴} blinked in surprise."
+  },
+  {
+    "unit": 11,
+    "source": "“简而言之就是——失恋了呢。”",
+    "marked_source": "“简而言之就是——失恋了呢。”",
+    "translation": "\"In short—she's been dumped.\""
+  },
+  {
+    "unit": 12,
+    "source": "“怎、怎么可能……”美琴的语气逐渐弱了下去。",
+    "marked_source": "“怎、怎么可能……”${美琴}的语气逐渐弱了下去。",
+    "translation": "\"H-How is that possible...\" ${美琴}'s tone gradually faded."
+  },
+  {
+    "unit": 13,
+    "source": "“噫吁嚱。”一色拍了拍美琴的肩膀说道，“都怪我，我真是个罪恶的女人。”",
+    "marked_source": "“噫吁嚱。”${一色}拍了拍${美琴}的肩膀说道，“都怪我，我真是个罪恶的女人。”",
+    "translation": "\"Oh dear.\" ${一色} patted ${美琴}'s shoulder and said, \"It's all my fault; I truly am a sinful woman.\""
+  },
+  {
+    "unit": 14,
+    "source": "“哎。”美琴捉住一色的手叹气道，“不管怎么样，总之黑子那家伙最近确实过于紧绷了，似乎是那‘虚空爆炸’的案件伤脑筋呢。”",
+    "marked_source": "“哎。”${美琴}捉住${一色}的手叹气道，“不管怎么样，总之${黑子}那家伙最近确实过于紧绷了，似乎是那‘虚空爆炸’的案件伤脑筋呢。”",
+    "translation": "\"Geez.\" ${美琴} grabbed ${一色}'s hand and sighed, \"No matter what, ${黑子}$ that girl has definitely been way too high-strung lately. She seems to be racking her brains over that 'Void Burst' case.\""
+  },
+  {
+    "unit": 15,
+    "source": "“嗯姆，坐视后辈伤脑筋可不是可靠前辈的作风呢。”",
+    "marked_source": "“嗯姆，坐视后辈伤脑筋可不是可靠前辈的作风呢。”",
+    "translation": "\"Hmm, sitting by and watching a junior rack her brains isn't the style of a reliable senior.\""
+  },
+  {
+    "unit": 16,
+    "source": "“是呢。”美琴笑着，“虽然那家伙天天说一般市民什么的，但是果真不能放任那家伙这么折腾自己呢。”",
+    "marked_source": "“是呢。”${美琴}笑着，“虽然那家伙天天说一般市民什么的，但是果真不能放任那家伙这么折腾自己呢。”",
+    "translation": "\"That's true.\" ${美琴} smiled, \"Even though that girl constantly talks about ordinary citizens and all, we really can't just let her push herself this hard.\""
+  },
+  {
+    "unit": 17,
+    "source": "“诶，是泪子呢。”一色看向在路对面刷新的一只佐天泪子，便招着手大声呼唤道。",
+    "marked_source": "“诶，是泪子呢。”${一色}看向在路对面刷新的一只${佐天泪子}，便招着手大声呼唤道。",
+    "translation": "\"Ah, it's Ruiko.\" ${一色} spotted ${佐天泪子} appearing across the street and waved her hand while calling out loudly."
+  },
+  {
+    "unit": 18,
+    "source": "“泪子……”美琴不着痕迹地瞥了一色一眼，这家伙什么时候开始叫上佐天同学这么亲昵的称呼了。",
+    "marked_source": "“泪子……”${美琴}不着痕迹地瞥了${一色}一眼，这家伙什么时候开始叫上佐天同学这么亲昵的称呼了。",
+    "translation": "\"Ruiko...\" ${美琴} cast a subtle glance at ${一色}. When did this girl start using such an affectionate nickname for classmate Saten?"
+  },
+  {
+    "unit": 19,
+    "source": "美琴发力握紧了一色的小手，但这家伙的手跟没有骨头一样，不管怎么使劲都如流水般任意形变，当事人更是一脸无感的困惑神情看着自己。",
+    "marked_source": "${美琴}发力握紧了${一色}的小手，但这家伙的手跟没有骨头一样，不管怎么使劲都如流水般任意形变，当事人更是一脸无感的困惑神情看着自己。",
+    "translation": "${美琴} tightened her grip on ${一色}'s little hand, but this girl's hand felt boneless; no matter how much force she exerted, it deformed like flowing water, while the person in question simply looked back at her with a bewildered and oblivious expression."
+  },
+  {
+    "unit": 20,
+    "source": "看着欢快地穿越马路接近的佐天泪子，美琴便松开了一色的手。",
+    "marked_source": "看着欢快地穿越马路接近的${佐天泪子}，${美琴}便松开了${一色}的手。",
+    "translation": "Watching ${佐天泪子} cheerfully cross the street and approach, ${美琴} let go of ${一色}'s hand."
+  },
+  {
+    "unit": 21,
+    "source": "佐天泪子开心地与一色跟美琴打招呼，三人寒暄几句便一同走向附近公园里的长椅上。",
+    "marked_source": "${佐天泪子}开心地与${一色}跟${美琴}打招呼，三人寒暄几句便一同走向附近公园里的长椅上。",
+    "translation": "${佐天泪子} happily greeted ${一色} and ${美琴}, and after exchanging a few pleasantries, the three of them walked together toward a bench in a nearby park."
+  },
+  {
+    "unit": 22,
+    "source": "美琴总感觉佐天泪子在跟一色说话时，眼睛总会闪啊闪的，不知道是不是错觉。",
+    "marked_source": "${美琴}总感觉${佐天泪子}在跟${一色}说话时，眼睛总会闪啊闪的，不知道是不是错觉。",
+    "translation": "${美琴} had a lingering feeling that whenever ${佐天泪子} spoke to ${一色}, her eyes kept flashing and sparkling. She wasn't sure if she was just imagining it."
+  },
+  {
+    "unit": 23,
+    "source": "定睛瞧了几十秒，美琴确信了。",
+    "marked_source": "定睛瞧了几十秒，${美琴}确信了。",
+    "translation": "After staring intently for a few dozen seconds, ${美琴} became certain."
+  },
+  {
+    "unit": 24,
+    "source": "啧，果真不是错觉呢。",
+    "marked_source": "啧，果真不是错觉呢。",
+    "translation": "Tsk, it really wasn't her imagination."
+  },
+  {
+    "unit": 25,
+    "source": "一色，罪恶的女人。",
+    "marked_source": "${一色}，罪恶的女人。",
+    "translation": "${一色}, what a sinful woman."
+  },
+  {
+    "unit": 26,
+    "source": "*",
+    "marked_source": "*",
+    "translation": "*"
+  },
+  {
+    "unit": 27,
+    "source": "*",
+    "marked_source": "*",
+    "translation": "*"
+  },
+  {
+    "unit": 28,
+    "source": "*",
+    "marked_source": "*",
+    "translation": "*"
+  },
+  {
+    "unit": 29,
+    "source": "*",
+    "marked_source": "*",
+    "translation": "*"
+  },
+  {
+    "unit": 30,
+    "source": "ps.感谢吼姆剑圣大姨妈的咸鱼突刺",
+    "marked_source": "ps.感谢吼姆剑圣大姨妈的咸鱼突刺",
+    "translation": "ps. Thanks to Homu-sensei Daima's Salted Fish Thrust"
+  },
+  {
+    "unit": 31,
+    "source": "感谢书客88945837861的咸鱼突刺",
+    "marked_source": "感谢书客88945837861的咸鱼突刺",
+    "translation": "Thanks to Book-guest 88945837861's Salted Fish Thrust"
+  },
+  {
+    "unit": 32,
+    "source": "感谢琥珀D的一张月票",
+    "marked_source": "感谢琥珀D的一张月票",
+    "translation": "Thanks to Amber D's monthly ticket"
+  },
+  {
+    "unit": 33,
+    "source": "阿里嘎多！",
+    "marked_source": "阿里嘎多！",
+    "translation": "Arigato!"
+  },
+  {
+    "unit": 34,
+    "source": "ps2.总感觉不知道自己想干什么。",
+    "marked_source": "ps2.总感觉不知道自己想干什么。",
+    "translation": "ps2. I somehow feel like I don't know what I want to do."
+  },
+  {
+    "unit": 35,
+    "source": "第十九章：黑子特烦恼",
+    "marked_source": "第十九章：${黑子}特烦恼",
+    "translation": "Chapter 19: ${黑子}'s Troubles"
+  },
+  {
+    "unit": 36,
+    "source": "白井黑子最近有些忧郁。",
+    "marked_source": "${白井黑子}最近有些忧郁。",
+    "translation": "${白井黑子} has been a bit melancholic lately."
+  },
+  {
+    "unit": 37,
+    "source": "扎着八爪鱼双马尾的女孩在桌前枯坐，手中的小镜子映照出略显幼态的容颜，但毋庸置疑是美少女级别的颜值呢。",
+    "marked_source": "扎着八爪鱼双马尾的女孩在桌前枯坐，手中的小镜子映照出略显幼态的容颜，但毋庸置疑是美少女级别的颜值呢。",
+    "translation": "The girl with octopus-style twin tails sat quietly at her desk, her small mirror reflecting a slightly childish face, though it was undeniably of pretty-girl caliber."
+  },
+  {
+    "unit": 38,
+    "source": "白井黑子将小镜扣下，托着雪白的腮帮子长太息。",
+    "marked_source": "${白井黑子}将小镜扣下，托着雪白的腮帮子长太息。",
+    "translation": "${白井黑子} placed the small mirror face down, rested her fair cheek in her hand, and let out a long sigh."
+  },
+  {
+    "unit": 39,
+    "source": "作为白井家的大小姐，自幼便品学兼优冰雪聪明，来到学园都市后依然在同辈中//出彩，甚至成为了最年轻一批的风纪委员——在小学生时代便已经加入风纪委员，成为一只光荣的夹击妹抖。",
+    "marked_source": "作为白井家的大小姐，自幼便品学兼优冰雪聪明，来到${学园都市}后依然在同辈中//出彩，甚至成为了最年轻一批的风纪委员——在小学生时代便已经加入风纪委员，成为一只光荣的夹击妹抖。",
+    "translation": "As a young lady of the Shirai family, she had been exceptional in character, learning, and wit since childhood. After coming to ${学园都市}, she continued to stand out among her peers, even becoming one of the youngest members of Judgment—joining Judgment back in her elementary school days and becoming a proud judgelily."
+  },
+  {
+    "unit": 40,
+    "source": "并且刚进行一线实习时就解决了一起邮局抢劫案，立大功了呢。",
+    "marked_source": "并且刚进行一线实习时就解决了一起邮局抢劫案，立大功了呢。",
+    "translation": "Moreover, right when she started her frontline internship, she solved a post office robbery case and made a huge contribution."
+  }
+]

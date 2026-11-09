@@ -2,7 +2,7 @@ import pytest
 
 from book_maker.cli import build_parser
 from book_maker.loader.epub_loader import EPUBBookLoader
-from book_maker.loader.helper import translate_list_or_singles
+from book_maker.loader.helper import translate_list_or_singles, DEFAULT_CHUNK_ATTEMPTS
 from book_maker.translator.base_translator import BatchMismatch
 
 
@@ -57,7 +57,7 @@ def test_exhaustion_never_silently_retries_paragraphs(plan):
             loader._translate_texts_aligned(texts)
         else:
             translate_list_or_singles(model, texts)
-    assert model.batches == [texts] * 3
+    assert model.batches == [texts] * DEFAULT_CHUNK_ATTEMPTS
     assert model.singles == []
 
 

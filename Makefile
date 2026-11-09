@@ -1,13 +1,13 @@
 SHELL := /bin/bash
+PYTHON ?= python
+
+.PHONY: fmt tests serve-docs
 
 fmt:
-	@echo "Running formatter ..."
-	venv/bin/black .
+	$(PYTHON) -m black .
 
-.PHONY:tests
 tests:
-	@echo "Running tests ..."
-	venv/bin/pytest tests/test_integration.py
+	$(PYTHON) -m pytest
 
 serve-docs:
-	mkdocs serve
+	$(PYTHON) -m mkdocs serve

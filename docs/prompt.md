@@ -2,9 +2,9 @@
 
 To tweak the prompt, use the `--prompt` parameter. The placeholders the `user` template may use are `{text}` (required), `{language}` and `{crlf}` (a newline, for the shapes that cannot carry one). Anything else in braces is refused before the run starts; write `{{` and `}}` for a literal brace. It supports a few ways to configure the prompt:
 
-- If you don't need to set the `system` role content, you can simply set it up like this: `--prompt "Translate {text} to {language}."` or `--prompt prompt_template_sample.txt`
+- If you don't need to set the `system` role content, you can simply set it up like this: `--prompt "Translate {text} to {language}."` or `--prompt examples/prompts/prompt_template_sample.txt`
 
-        # prompt_template_sample.txt
+        # examples/prompts/prompt_template_sample.txt
         Translate the given text to {language}. Be faithful or accurate in translation. Make the translation readable or intelligible. Be elegant or natural in translation. If the text cannot be translated, return the original text as is. Do not translate person's name. Do not add any additional text in the translation. The text to be translated is: 
         {text}
         
@@ -24,7 +24,7 @@ To tweak the prompt, use the `--prompt` parameter. The placeholders the `user` t
 
 You can also set the `user` and `system` role prompt by setting environment variables: `BBM_CHATGPTAPI_USER_MSG_TEMPLATE` and `BBM_CHATGPTAPI_SYS_MSG` (gemini reads `BBM_GEMINIAPI_USER_MSG_TEMPLATE` and `BBM_GEMINIAPI_SYS_MSG`). `--prompt` outranks all of them. `OPENAI_API_SYS_MSG` is still read as a fallback but is deprecated — it used to outrank `--prompt`'s own system message.
 
-- A `.md` file is read as the [PromptDown](https://github.com/btfranklin/promptdown) **block** form. The format is theirs; the reader is this repo's own, so no extra package is installed. `--prompt prompt_md.prompt.md`
+- A `.md` file is read as the [PromptDown](https://github.com/btfranklin/promptdown) **block** form. The format is theirs; the reader is this repo's own, so no extra package is installed. `--prompt examples/prompts/prompt_md.prompt.md`
 
         # Translation Prompt
 
@@ -48,7 +48,7 @@ You can also set the `user` and `system` role prompt by setting environment vari
 
 ## Examples
 ```sh
-python3 make_book.py --book_name test_books/animal_farm.epub --prompt prompt_template_sample.txt
+python3 make_book.py --book_name test_books/animal_farm.epub --prompt examples/prompts/prompt_template_sample.txt
 # or
 python3 make_book.py --book_name test_books/animal_farm.epub --prompt prompt_template.json
 # or

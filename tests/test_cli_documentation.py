@@ -162,7 +162,7 @@ def test_references_name_no_flag_that_does_not_exist():
         "make_gg_book.py", "preview_progress.py",
         "fix_epub_metadata.py", "fix_en_metadata.py",
     ):
-        tree = ast.parse((ROOT / script).read_text(encoding="utf-8"))
+        tree = ast.parse((ROOT / "book_maker" / "tools" / script).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "add_argument":
                 known.update(
