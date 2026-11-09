@@ -6,10 +6,9 @@ session-mode compact turn hands off. Both end up as a `Glossary`, and both
 reach the model the same way — through `prompt_block`, which emits *only* the
 terms that actually occur in the unit being translated.
 
-The two are kept apart on purpose, and only the file half is ever recorded
-anywhere: the pinned file is something the operator wrote and can be shown
-alongside the book, while the derived half is a runtime artefact of one run's
-compaction turns and never leaves the process.
+Pinned entries belong to the operator. Learned entries are provisional and
+persist in handoff snapshots; proposals and ambiguity decisions also have a
+separate review journal. Neither path edits the operator's glossary file.
 
 That "only the hits" rule is not a token micro-optimization. In session mode
 the request prefix must stay byte-stable or the cache read is lost, so a
@@ -94,6 +93,11 @@ def _matcher(entry: GlossaryEntry) -> re.Pattern:
     right = "" if _is_cjk(entry.term[-1]) else _RIGHT_GUARD
     flags = 0 if entry.case_sensitive else re.IGNORECASE
     return re.compile(f"{left}{literal}{right}", flags)
+
+
+def rendering_matcher(entry: GlossaryEntry) -> re.Pattern:
+    """Find the expected rendering as a word/name, not inside a longer word."""
+    return _matcher(GlossaryEntry(entry.translation, entry.term, case_sensitive=entry.case_sensitive))
 
 
 class Glossary:
@@ -198,15 +202,23 @@ class Glossary:
         hits = self.matches(source_text)
         if not hits:
             return ""
+        from book_maker.glossary_review import category
+        groups = {"name": [], "place": [], "people": [], "vocabulary": [], "unclassified": []}
+        for entry in hits:
+            groups[category(entry)].append(
+                f"{entry.term} → {entry.translation}" + (f" ({entry.note})" if entry.note else "")
+            )
         lines = "\n".join(
-            f"{e.term} → {e.translation}" + (f" ({e.note})" if e.note else "")
-            for e in hits
+            f"[{kind}]\n" + "\n".join(rows)
+            for kind, rows in groups.items() if rows
         )
         return (
             "<glossary>\n"
             f"{lines}\n"
             "</glossary>\n"
-            "Use these translations verbatim in your translation."
+            "Use these translations verbatim in your translation. "
+            "Keep places distinct from their people. Vocabulary may need grammatical "
+            "inflection; notes describe context and must not be copied into the prose."
         )
 
     # ---- combination ------------------------------------------------------

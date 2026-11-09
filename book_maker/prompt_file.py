@@ -36,6 +36,30 @@ a template read out of a table cell arrives with its newlines still spelled
 """
 
 import re
+from pathlib import Path
+
+
+_BUNDLED_PROMPTS = frozenset({
+    "prompt_decensor.json", "prompt_md.json", "prompt_md.prompt.md",
+    "prompt_template_sample.txt",
+})
+
+
+def resolve_prompt_path(value):
+    """Keep historical sample filenames working after moving the examples.
+
+    A user's existing file always wins. Only bare bundled filenames have an
+    alias; a misspelled or missing explicit path must still fail visibly.
+    """
+    name = value.lower()
+    if name not in _BUNDLED_PROMPTS:
+        return value
+    path = Path(value)
+    if not path.exists():
+        bundled = Path(__file__).resolve().parents[1] / "examples" / "prompts" / name
+        if bundled.is_file():
+            return str(bundled)
+    return value
 
 # `## Heading` — only the ones this reader knows are sections; anything else
 # is refused by name rather than silently dropped, because a misspelled

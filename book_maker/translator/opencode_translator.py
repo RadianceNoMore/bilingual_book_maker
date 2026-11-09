@@ -123,7 +123,7 @@ class OpenCodeTranslator(Base):
 
         # Glossary pins
         if self.glossary:
-            block = self.glossary.prompt_block(text)
+            block = self.glossary_prompt_block(text)
             if block:
                 parts.append(block.strip())
 

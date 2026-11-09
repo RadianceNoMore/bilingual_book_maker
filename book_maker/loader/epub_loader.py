@@ -27,6 +27,9 @@ from rich.markup import escape
 from tqdm import tqdm
 
 from book_maker import translation_metadata as tmeta
+from book_maker.batching import (
+    DEFAULT_REQUEST_MAX_UNITS, DEFAULT_REQUEST_MAX_TOKENS, request_slices,
+)
 from .epub_localization import (
     bilingual as localized_label,
     collect_titles,
@@ -34,6 +37,7 @@ from .epub_localization import (
     sync_documents,
 )
 from book_maker.redaction import redact
+from book_maker.output_naming import safe_title_stem
 from book_maker.obfuscated_codes import RULE_VERSION, code_spans, strip_codes, clean_document
 from book_maker.translation_quality import untranslated_reason, validate_translation_texts, UntranslatedTextError
 from book_maker.translator.base_translator import Base, BatchMismatch
@@ -63,6 +67,7 @@ from .helper import (
     shorter_result_link,
     strip_duplicate_ids,
     translate_list_or_singles,
+    untranslated_retry_feedback,
 )
 from .disclosure import (
     credit_name,
@@ -372,6 +377,8 @@ class EPUBBookLoader(BaseBookLoader):
         self.accumulated_num_given = False
         self.accumulate_across_chapters = False
         self.whole_chapter = False
+        self.request_max_units = DEFAULT_REQUEST_MAX_UNITS
+        self.request_max_tokens = DEFAULT_REQUEST_MAX_TOKENS
         self.retry_one_by_one = False
         self.max_chunk_attempts = DEFAULT_CHUNK_ATTEMPTS
         self.translate_metadata = True
@@ -519,18 +526,10 @@ class EPUBBookLoader(BaseBookLoader):
         self.p_to_save = []
         self.resume = resume
         self.bin_path = f"{Path(epub_name).parent}/.{Path(epub_name).stem}.temp.bin"
+        from book_maker.run_state import prepare_book_run
+        prepare_book_run(epub_name, self.resume)
         if self.resume:
             self.load_state()
-        elif os.path.exists(self.bin_path):
-            # Overwriting is the documented behaviour; doing it silently is
-            # not. A run that meant to continue has one flag to add. Worded
-            # as a prospect: a plan gate or a filter typo may still end the
-            # run before the first save touches the file.
-            print(
-                f"[yellow]existing progress cache {self.bin_path} is ignored "
-                f"and will be overwritten once translation starts; pass "
-                f"--resume to continue it instead[/yellow]"
-            )
 
     @staticmethod
     def _is_special_text(text):
@@ -2385,8 +2384,25 @@ class EPUBBookLoader(BaseBookLoader):
 
     def _translate_texts_aligned(
         self, texts, translator=None, units=None, batch_function=None,
-        retry_one_by_one=None,
+        retry_one_by_one=None, force_bounded=False,
     ):
+        # Apply bounds before sending anything, including navigation batches.
+        # Explicit whole-chapter affects body requests only; TOCs remain bounded.
+        if force_bounded or not getattr(self, "whole_chapter", False):
+            slices = list(request_slices(
+                texts, getattr(self, "request_max_units", DEFAULT_REQUEST_MAX_UNITS),
+                getattr(self, "request_max_tokens", DEFAULT_REQUEST_MAX_TOKENS),
+                num_tokens_from_text,
+            ))
+            if len(slices) > 1:
+                result = []
+                for part in slices:
+                    result.extend(self._translate_texts_aligned(
+                        texts[part], translator,
+                        units[part] if units is not None else None,
+                        batch_function, retry_one_by_one,
+                    ))
+                return result
         # Preserve slot count and original job identities, including code-only
         # slots. Empty cleaned slots never reach the model or its history.
         if getattr(self, "strip_obfuscated_codes", True):
@@ -2413,15 +2429,45 @@ class EPUBBookLoader(BaseBookLoader):
         translator = translator or self.translate_model
 
         def attempt():
-            result = self._translate_texts_attempt(texts, translator, units, batch_function)
-            if getattr(self, "strip_obfuscated_codes", True):
-                result = [strip_codes(value) for value in result]
-            return result
+            from book_maker.glossary_gate import enabled, load_approved, transaction, commit, register_chunk
+
+            def translate():
+                result = self._translate_texts_attempt(texts, translator, units, batch_function)
+                if getattr(self, "strip_obfuscated_codes", True):
+                    result = [strip_codes(value) for value in result]
+                return result
+
+            if not enabled(translator):
+                return translate()
+            translator._glossary_gate_active = True
+            if not getattr(translator, "glossary_source_sha256", None):
+                translator.glossary_source_sha256 = sha256(Path(self.epub_name).read_bytes()).hexdigest()
+            load_approved(translator)
+            if not getattr(translator, "_glossary_correcting", False):
+                self._repair_glossary_chunks()
+            with transaction(translator):
+                result = translate()
+                if (not isinstance(result, (list, tuple)) or len(result) != len(texts)
+                        or any(s.strip() and (not isinstance(t, str) or not t.strip())
+                               for s, t in zip(texts, result))):
+                    raise BatchMismatch("Chunk has missing translations")
+                validate_translation_texts(texts, result, self.language, self.source_lang)
+                if getattr(translator, "_glossary_correcting", False):
+                    return result  # Discard corrective history and all glossary side effects.
+                chunk_id = register_chunk(translator, texts, result)
+                # Release normal history only after validation. This can trigger
+                # the original compaction request, followed by glossary voting.
+                commit(translator, {"chunk_id": chunk_id, "entries": []})
+            self._repair_glossary_chunks()
+            return list(translator._glossary_chunks[chunk_id]["translations"])
 
         one_by_one = (
             getattr(self, "retry_one_by_one", False)
             if retry_one_by_one is None else retry_one_by_one
         )
+        from book_maker.glossary_gate import enabled as glossary_gate_enabled
+        if glossary_gate_enabled(translator):
+            one_by_one = False  # Rejected glossary proposals always retry a whole chunk.
         try:
             return translate_list_or_singles(
                 translator, texts,
@@ -2431,10 +2477,6 @@ class EPUBBookLoader(BaseBookLoader):
                 source_language=getattr(self, "source_lang", None),
                 max_attempts=getattr(self, "max_chunk_attempts", None),
             )
-        except UntranslatedTextError:
-            # A smaller request cannot make a returned source-language answer
-            # safe to accept. Keep this guardrail loud and checkpointable.
-            raise
         except BatchMismatch as error:
             # Only split when both children can keep at least two units;
             # otherwise an odd-sized chunk could silently create a singleton.
@@ -2443,7 +2485,7 @@ class EPUBBookLoader(BaseBookLoader):
 
             midpoint = len(texts) // 2
             print(
-                f"[yellow]Batch of {len(texts)} still had an alignment mismatch "
+                f"[yellow]Batch of {len(texts)} still failed translation validation "
                 f"after {getattr(self, 'max_chunk_attempts', DEFAULT_CHUNK_ATTEMPTS)} "
                 f"whole-chunk attempts ({error}); retrying as smaller "
                 f"groups of {midpoint} and {len(texts) - midpoint} units. "
@@ -2452,14 +2494,15 @@ class EPUBBookLoader(BaseBookLoader):
             )
             left_units = units[:midpoint] if units is not None else None
             right_units = units[midpoint:] if units is not None else None
-            left = self._translate_cleaned_texts_aligned(
-                texts[:midpoint], translator, left_units, batch_function,
-                retry_one_by_one=False,
-            )
-            right = self._translate_cleaned_texts_aligned(
-                texts[midpoint:], translator, right_units, batch_function,
-                retry_one_by_one=False,
-            )
+            with untranslated_retry_feedback(translator, isinstance(error, UntranslatedTextError)):
+                left = self._translate_cleaned_texts_aligned(
+                    texts[:midpoint], translator, left_units, batch_function,
+                    retry_one_by_one=False,
+                )
+                right = self._translate_cleaned_texts_aligned(
+                    texts[midpoint:], translator, right_units, batch_function,
+                    retry_one_by_one=False,
+                )
             return left + right
 
     def _translate_texts_attempt(
@@ -3987,7 +4030,7 @@ class EPUBBookLoader(BaseBookLoader):
         ).casefold()
 
     def _translate_toc_batch(self, chapter_plans, title_records):
-        """Translate all selected EPUB navigation labels together before prose."""
+        """Translate selected navigation labels in resumable bounded groups."""
         self._toc_job_translations = {}
         if not self.translate_metadata or self.is_test:
             return {}
@@ -4051,8 +4094,8 @@ class EPUBBookLoader(BaseBookLoader):
                 is Base.translate_list
             ):
                 # The base implementation loops over labels. Use its
-                # delimiter batch rung here so the complete TOC remains one
-                # provider request on routes without a structured override.
+                # delimiter batch rung for each bounded navigation group on
+                # routes without a structured override.
                 batch_function = lambda texts: translator._do_batch_translate(
                     texts,
                     getattr(translator, "prompt_template", None),
@@ -4060,12 +4103,29 @@ class EPUBBookLoader(BaseBookLoader):
                     getattr(translator, "DEFAULT_PROMPT", ""),
                     lambda text: translator.translate(text),
                 )
+            translated = []
             try:
-                translated = self._translate_texts_aligned(
+                for part in request_slices(
                     pending_sources,
-                    batch_function=batch_function,
-                    retry_one_by_one=False,
-                )
+                    getattr(self, "request_max_units", DEFAULT_REQUEST_MAX_UNITS),
+                    getattr(self, "request_max_tokens", DEFAULT_REQUEST_MAX_TOKENS),
+                    num_tokens_from_text,
+                ):
+                    sources = pending_sources[part]
+                    values = self._translate_texts_aligned(
+                        sources, batch_function=batch_function,
+                        retry_one_by_one=False, force_bounded=True,
+                    )
+                    marker = translator.TRANSLATION_ERROR_MARKER
+                    if translator._fatal_error_detected or (marker is not None and marker in values):
+                        raise ValueError("TOC translation failed; progress was saved")
+                    translated.extend(values)
+                    # Retain every completed group if a later TOC group fails.
+                    approved = dict(zip(sources, values))
+                    for cache_key, source in unique_targets.items():
+                        if source in approved:
+                            self._localized_cache[cache_key] = approved[source]
+                    self._save_progress()
             except UntranslatedTextError as error:
                 files = sorted(
                     {
@@ -4126,6 +4186,10 @@ class EPUBBookLoader(BaseBookLoader):
         if self.whole_chapter:
             request_budget = float("inf")
             request_cap = None
+        else:
+            request_budget = min(request_budget, getattr(self, "request_max_tokens", DEFAULT_REQUEST_MAX_TOKENS))
+            request_cap = min(request_cap or DEFAULT_REQUEST_MAX_UNITS,
+                              getattr(self, "request_max_units", DEFAULT_REQUEST_MAX_UNITS))
         pending = []
         tokens = 0
 
@@ -4199,6 +4263,50 @@ class EPUBBookLoader(BaseBookLoader):
             if plan.jobs:
                 plan.item.content = plan.soup.encode("utf-8")
 
+    def _write_consistency_report(self, chapter_plans, name):
+        """Audit accepted target slots, never the bilingual source copies."""
+        from book_maker.translation_audit import write_audit
+        from book_maker.glossary_review import review_path
+
+        translator = self.translate_model
+        handoff = getattr(translator, "handoff_path", None)
+        pairs = (
+            (plan.item.file_name, job.job_id, job.source_text,
+             self.p_to_save[job.global_index])
+            for plan in chapter_plans for job in plan.jobs
+            if job.global_index < len(self.p_to_save)
+        )
+        path = self.output_path(f"{name}_translation_report.json")
+        try:
+            report = write_audit(
+                path, pairs, getattr(translator, "glossary", None),
+                review_path(handoff) if handoff else None,
+                self.language, self.source_lang, pinned=getattr(translator, "pinned", None),
+                approved=getattr(translator, "approved_glossary", None),
+            )
+            count = sum(report["counts"].values())
+            print(f"Consistency report: {path} ({count} advisory findings)")
+        except OSError as error:
+            # The EPUB has already been written; keep the recovery checkpoint
+            # if a separate report cannot be persisted.
+            raise OSError(f"Book saved, but consistency report could not be written: {error}") from error
+
+    def _final_output_name(self, source_name):
+        """Translate only the finished book name; checkpoint identity is stable."""
+        if not getattr(self, "translate_filename", False) or self.is_test:
+            return source_name
+        source = Path(source_name).name
+        translated = self._cached_localization(f"filename:{source}", source)
+        stem = safe_title_stem(translated)
+        original = Path(self.output_path(f"{source_name}_bilingual.epub"))
+        target = Path(self.output_path(str(Path(source_name).with_name(stem)) + "_bilingual.epub"))
+        if target != original and target.exists():
+            raise FileExistsError(
+                f"Translated output already exists: {target}. Choose another --output-dir "
+                "or move the existing file before retrying."
+            )
+        return str(Path(source_name).with_name(stem))
+
     def _cached_localization(self, cache_key, source):
         fresh = cache_key not in self._localized_cache
         value = (
@@ -4237,6 +4345,67 @@ class EPUBBookLoader(BaseBookLoader):
                         f"{plan.item.file_name}, unit {job.node_index + 1}: {reason}. "
                         "Refusing to publish a finished book; the checkpoint is preserved."
                     )
+
+    def _repair_glossary_chunks(self, force=False):
+        """Replay rejected-term chunks once, without learning from the replay."""
+        from book_maker.glossary_gate import enabled, _persist, review_handoff
+        from book_maker.glossary import Glossary, GlossaryEntry
+        model = self.translate_model
+        if not enabled(model) or getattr(model, "_glossary_correcting", False):
+            return
+        pending = getattr(model, "_glossary_pending_handoff", None)
+        if pending:
+            review_handoff(model, Glossary([GlossaryEntry(**entry) for entry in pending["entries"]]), pending["summary"])
+        for chunk_id, repair in getattr(model, "_glossary_repairs", {}).items():
+            chunk = model._glossary_chunks[chunk_id]
+            applied = getattr(self, "_glossary_applied_repairs", set())
+            repair_key = (chunk_id, len(repair["decisions"]))
+            if repair["status"] == "done" and repair_key in applied and not force:
+                continue
+            if repair["status"] == "pending":
+                guidance = []
+                for key in repair["decisions"]:
+                    decision = model._glossary_decisions[key]
+                    entry = decision["entry"]
+                    if decision["translation"] is None:
+                        reasons = [v["reason"] for v in decision["votes"] if v["translation"] is None]
+                        guidance.append(f"Rejected {entry['term']} -> {entry['translation']}: " + "; ".join(reasons))
+                    else:
+                        guidance.append(f"Use {entry['term']} -> {decision['translation']}")
+                print(f"Retranslating {len(chunk['sources'])}-unit chunk containing a rejected glossary rendering...")
+                model._glossary_correcting = True
+                previous = getattr(model, "_glossary_review_feedback", "")
+                model._glossary_review_feedback = "Correct the entire chunk using this review:\n" + "\n".join(guidance)
+                try:
+                    values = self._translate_cleaned_texts_aligned(chunk["sources"], translator=model)
+                finally:
+                    model._glossary_correcting = False
+                    model._glossary_review_feedback = previous
+                chunk["translations"] = list(values)
+                repair["status"] = "done"
+                _persist(model)
+            # Reapply completed repairs on resume as well: a crash can occur
+            # after the ledger save but before the checkpoint save.
+            self._glossary_rebuild_needed = True
+            for index, (source, old, new) in enumerate(zip(chunk["sources"], repair["original"], chunk["translations"])):
+                previous = {old, *[version[index] for version in repair.get("prior_versions", [])]}
+                jobs = getattr(self, "_glossary_job_map", {}).get(source)
+                if jobs is None:
+                    jobs = getattr(self, "_glossary_jobs", ())
+                for job in jobs:
+                    clean_source = strip_codes(job.source_text) if getattr(self, "strip_obfuscated_codes", True) else job.source_text
+                    if clean_source != source:
+                        continue
+                    if job.global_index < len(self.p_to_save) and self.p_to_save[job.global_index] in previous:
+                        self.p_to_save[job.global_index] = new
+                    titles = getattr(self, "_toc_job_translations", {})
+                    if titles.get(job.job_id) in previous:
+                        titles[job.job_id] = new
+                for key, value in list(getattr(self, "_localized_cache", {}).items()):
+                    if key.endswith(":" + source) and value in previous:
+                        self._localized_cache[key] = new
+            applied.add(repair_key)
+            self._glossary_applied_repairs = applied
 
     def _prepare_obfuscated_codes(self, chapter_plans):
         """Migrate affected cached slots without changing their identities."""
@@ -4425,6 +4594,25 @@ class EPUBBookLoader(BaseBookLoader):
         print(f"[bold green]Saved recovery book: {path}[/bold green]")
 
     def make_bilingual_book(self):
+        from book_maker.glossary_gate import enabled as glossary_gate_enabled, load_approved, ledger_path
+        if getattr(self.translate_model, "glossary_auto_on", False) and not glossary_gate_enabled(self.translate_model):
+            raise ValueError(
+                "Automatic EPUB glossary consensus review currently requires an OpenAI-compatible "
+                "API route. This provider cannot perform the independent review transaction. "
+                "Use a supported route or explicitly turn --glossary-auto off."
+            )
+        if glossary_gate_enabled(self.translate_model):
+            model = self.translate_model
+            model._glossary_gate_active = True
+            model.glossary_source_sha256 = sha256(Path(self.epub_name).read_bytes()).hexdigest()
+            if self.resume and (self.p_to_save or self._localized_cache):
+                if getattr(self, "_resume_glossary_gate", None) != 2 or not ledger_path(model) or not ledger_path(model).exists():
+                    raise ValueError(
+                        "This checkpoint has no complete glossary review history. "
+                        "Restart without --resume to review the translation from the beginning. "
+                        "The old checkpoint has been left untouched."
+                    )
+            load_approved(model)
         if (
             self.resume
             and (self.p_to_save or self._localized_cache)
@@ -4447,6 +4635,16 @@ class EPUBBookLoader(BaseBookLoader):
         # checkpoint is this run's to continue, so a handoff left beside the
         # book must not seed anything until that has been agreed.
         self._restore_session_handoff()
+        if glossary_gate_enabled(self.translate_model):
+            model = self.translate_model
+            session = getattr(model, "session", None)
+            if self.resume and session:
+                # Preserve the un-compacted tail across interruption; its
+                # glossary still needs the normal compaction extraction.
+                for chunk_id in model._glossary_window_chunks:
+                    chunk = model._glossary_chunks[chunk_id]
+                    session.append(json.dumps(chunk["sources"], ensure_ascii=False),
+                                   json.dumps(chunk["translations"], ensure_ascii=False))
         self.helper = EPUBBookLoaderHelper(
             self.translate_model,
             self.accumulated_num,
@@ -4489,6 +4687,11 @@ class EPUBBookLoader(BaseBookLoader):
             order = {item_id: index for index, item_id in enumerate(spine_ids)}
             document_items.sort(key=lambda item: order.get(item.id, len(order)))
         chapter_plans = self._build_translation_plan(document_items, trans_taglist)
+        self._glossary_jobs = [job for plan in chapter_plans for job in plan.jobs]
+        self._glossary_job_map = {}
+        for job in self._glossary_jobs:
+            source = strip_codes(job.source_text) if getattr(self, "strip_obfuscated_codes", True) else job.source_text
+            self._glossary_job_map.setdefault(source, []).append(job)
         title_records = (
             collect_titles(self.origin_book, chapter_plans)
             if self.translate_metadata and not self.is_test
@@ -4522,6 +4725,28 @@ class EPUBBookLoader(BaseBookLoader):
         p_to_save_len = len(self.p_to_save)
         self._pending_translation_results = {}
         try:
+            if glossary_gate_enabled(self.translate_model) and self.p_to_save:
+                from book_maker.glossary_gate import register_chunk, _persist
+                model = self.translate_model
+                represented = {source for chunk in model._glossary_chunks.values() for source in chunk["sources"]}
+                tail = list(model._glossary_window_chunks)
+                # Old checkpoints have no request journal. Recover bounded
+                # groups from their existing chapter/batch plan without
+                # treating all past translations as a new session window.
+                for plan in chapter_plans:
+                    groups = {}
+                    for job in plan.jobs:
+                        source = strip_codes(job.source_text) if getattr(self, "strip_obfuscated_codes", True) else job.source_text
+                        if job.global_index < len(self.p_to_save) and source not in represented:
+                            groups.setdefault(job.batch_index, []).append((source, self.p_to_save[job.global_index]))
+                    for pairs in groups.values():
+                        for part in request_slices([p[0] for p in pairs],
+                                getattr(self, "request_max_units", DEFAULT_REQUEST_MAX_UNITS),
+                                getattr(self, "request_max_tokens", DEFAULT_REQUEST_MAX_TOKENS), num_tokens_from_text):
+                            register_chunk(model, [p[0] for p in pairs[part]], [p[1] for p in pairs[part]])
+                model._glossary_window_chunks = tail
+                _persist(model)
+            self._repair_glossary_chunks()
             self._prepare_obfuscated_codes(chapter_plans)
             if self.retranslate:
                 self.retranslate_book(
@@ -4701,8 +4926,29 @@ class EPUBBookLoader(BaseBookLoader):
             if self.batch_flag:
                 self.translate_model.batch()
             else:
-                self._write_book(f"{name}_bilingual.epub", new_book)
-                self.announce_saved_book(f"{name}_bilingual.epub")
+                final_name = self._final_output_name(name)
+                from book_maker.glossary_gate import enabled as review_enabled
+                model = self.translate_model
+                if review_enabled(model) and not getattr(model, "no_context_compact", False):
+                    session = getattr(model, "session", None)
+                    if session and any(m.get("role") == "assistant" for m in session.messages()):
+                        # Review the final short window too, before publishing.
+                        model._compact_session()
+                        if getattr(model, "_compact_failures", 0):
+                            raise ValueError("Final glossary compaction failed; resume to retry before publishing")
+                    self._repair_glossary_chunks(force=True)
+                    self._save_progress()
+                if getattr(self, "_glossary_rebuild_needed", False):
+                    new_book, chapter_plans, title_records = self._save_temp_book(build_only=True)
+                if getattr(self, "_glossary_rebuild_needed", False):
+                    # Replayed content is localized from repaired caches only.
+                    # Re-evaluate the filename cache after the final review.
+                    final_name = self._final_output_name(name)
+                self._validate_completed_translations(chapter_plans)
+                self._write_book(f"{final_name}_bilingual.epub", new_book)
+                self.announce_saved_book(f"{final_name}_bilingual.epub")
+                if not self.is_test:
+                    self._write_consistency_report(chapter_plans, final_name)
                 # Remove temporary files on complete success
                 try:
                     if os.path.exists(self.bin_path):
@@ -4798,6 +5044,7 @@ class EPUBBookLoader(BaseBookLoader):
             # continue rather than being refused.
             self._resume_run_fingerprint = state.get("run_fingerprint")
             self._loaded_checkpoint_version = state["version"]
+            self._resume_glossary_gate = state.get("glossary_review_passes")
             if self._loaded_checkpoint_version == 3:
                 print(
                     "[yellow]Loaded a version 3 checkpoint. Saved translations "
@@ -4809,7 +5056,7 @@ class EPUBBookLoader(BaseBookLoader):
         except Exception:
             raise Exception("can not load resume file")
 
-    def _save_temp_book(self):
+    def _save_temp_book(self, build_only=False):
         name, _ = os.path.splitext(self.epub_name)
         temp_path = self.output_path(f"{name}_bilingual_temp.epub")
         origin_book_temp = epub.read_epub(self.epub_name)
@@ -4886,6 +5133,8 @@ class EPUBBookLoader(BaseBookLoader):
                 self._localize_book(
                     new_temp_book, all_plans, title_records, allow_requests=False
                 )
+            if build_only:
+                return new_temp_book, all_plans, title_records
             self._write_book(temp_path, new_temp_book)
             print(f"[bold green]Saved recovery book: {temp_path}[/bold green]")
         except Exception as e:
@@ -4911,6 +5160,9 @@ class EPUBBookLoader(BaseBookLoader):
                 "job_ids": completed_job_ids,
                 "translations": self.p_to_save,
                 "localized_cache": self._localized_cache,
+                "glossary_review_passes": (
+                    2 if getattr(self.translate_model, "_approved_loaded", False) else None
+                ),
                 "cross_chapters": self.accumulate_across_chapters,
                 "obfuscated_code_cleanup": (
                     RULE_VERSION if getattr(self, "strip_obfuscated_codes", True) else None

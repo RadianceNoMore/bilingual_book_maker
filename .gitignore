@@ -166,3 +166,13 @@ input/
 
 # your own provider entries, copied from bbm_providers.example.json
 bbm_providers.json
+
+# Per-book review artifacts beside handoff snapshots
+*_glossary_review.jsonl
+*_approved_glossary.json
+*_translation_report.json
+
+# Bundled samples are distinct from the ignored personal prompts/ directory.
+!examples/prompts/
+!examples/prompts/prompt_template_sample.txt
+make_gg_book.skip.json

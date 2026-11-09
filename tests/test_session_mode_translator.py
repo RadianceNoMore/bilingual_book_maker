@@ -113,6 +113,18 @@ def _prefix(call):
     return call["messages"][:-1]
 
 
+def test_language_retry_feedback_reaches_plain_and_structured_user_prompts():
+    from book_maker.loader.helper import untranslated_retry_feedback
+
+    translator = _translator()
+    with untranslated_retry_feedback(translator):
+        plain = translator._user_content("source passage")
+        structured = translator._create_structured_batch_messages(["one", "two"])
+        assert "previous response copied" in plain
+        assert any("previous response copied" in m["content"] for m in structured)
+    assert "previous response copied" not in translator._user_content("next passage")
+
+
 def _tail_containing(translator, needle):
     """The tail message of the last request that carried `needle`.
 
@@ -676,7 +688,8 @@ class TestAFixedStyleRidesTheWindowStart:
         t.translate("a" * 4000, False)
         t.translate("b" * 10, False)
         compact = _tail_containing(t, HANDOFF_MARKER)
-        assert "style" not in compact.lower()
+        from book_maker.session_context import _STYLE_REQUEST
+        assert _STYLE_REQUEST not in compact
 
     def test_the_report_shows_the_users_style_verbatim(self, tmp_path, capsys):
         path = tmp_path / "h.md"

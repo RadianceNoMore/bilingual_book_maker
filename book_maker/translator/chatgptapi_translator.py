@@ -831,9 +831,34 @@ class ChatGPTAPI(Base):
         content = self._functional_preamble(text) + self.prompt_template.format(
             text=text, language=self.language, crlf="\n"
         )
-        block = self.glossary.prompt_block(text) if self.glossary else ""
+        block = self.glossary_prompt_block(text)
         content = f"{block}\n\n{content}" if block else content
+        retry_feedback = getattr(self, "_translation_retry_feedback", "")
+        if retry_feedback:
+            content += "\n\n" + retry_feedback
+        feedback = getattr(self, "_glossary_review_feedback", "")
+        if feedback:
+            content = f"Retranslate this entire chunk. Correct the glossary review issues: {feedback}\n\n{content}"
         return self._fold_standing_instructions(content)
+
+    CHUNK_GLOSSARY_REVIEW = True
+
+    def glossary_review_request(self, prompt):
+        """One independent request, without translation history or prompt templates."""
+        messages = [
+            {"role": "system", "content": "You audit source-grounded translation terminology. Return JSON only."},
+            {"role": "user", "content": prompt},
+        ]
+        completion = self._request(lambda sampling: self.openai_client.chat.completions.create(
+            model=self.model, messages=messages,
+            extra_body=self.extra_body if self.extra_body else None, **sampling,
+        ))
+        self._note_usage(completion)
+        choice = completion.choices[0]
+        if getattr(choice, "finish_reason", None) == "length":
+            from book_maker.glossary_gate import GlossaryRejected
+            raise GlossaryRejected("Glossary review response was truncated")
+        return choice.message.content or ""
 
     def create_messages(self, text, intermediate_messages=None):
         content = self._user_content(text)
@@ -1131,7 +1156,8 @@ class ChatGPTAPI(Base):
         """
         budget = self._session_budget()
         prompt = handoff_prompt(
-            with_glossary=self.glossary_auto_on, with_style=not self.style_note
+            with_glossary=self.glossary_auto_on,
+            with_style=False
         )
         # Captured before the reset, because grounding asks whether a
         # reported pair is actually in the window being condensed.
@@ -1344,7 +1370,13 @@ class ChatGPTAPI(Base):
         # Pinned terms for this group, on the same rule as a single unit: only
         # the ones that occur in the batch, and first, so the shape and the
         # target language stay the last thing the model reads.
-        glossary_block = self.glossary.prompt_block(texts_json) if self.glossary else ""
+        glossary_block = self.glossary_prompt_block(texts_json)
+        retry_feedback = getattr(self, "_translation_retry_feedback", "")
+        if retry_feedback:
+            glossary_block += "\n" + retry_feedback
+        feedback = getattr(self, "_glossary_review_feedback", "")
+        if feedback:
+            glossary_block += "\nRetranslate the entire chunk; correct these glossary review issues: " + feedback
         content = (f"{glossary_block}\n\n" if glossary_block else "") + (
             f"{self._functional_preamble(texts_json, batched=True)}{user_prompt}\n\n"
             f"Return a JSON object whose '{field}' contains EXACTLY "

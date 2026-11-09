@@ -2,6 +2,7 @@ import inspect
 import posixpath
 import re
 import zipfile
+from contextlib import contextmanager
 
 from rich import print
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from lxml import etree
 from tenacity import Retrying, retry, retry_if_exception, wait_exponential, stop_after_attempt
 
 from book_maker.translator.base_translator import BatchMismatch
-from book_maker.translation_quality import validate_translation_texts
+from book_maker.translation_quality import UntranslatedTextError, validate_translation_texts
 from book_maker.utils import language_code
 
 logging.basicConfig(level=logging.WARNING)
@@ -561,6 +562,27 @@ _URL_TAIL_RE = re.compile(r".*" + url_pattern + r"$")
 
 DEFAULT_CHUNK_ATTEMPTS = 5
 
+UNTRANSLATED_RETRY_FEEDBACK = (
+    "The previous response copied source text or left it untranslated. "
+    "Translate the entire chunk into the requested target language. Return only "
+    "the translations, without repeating the source. Preserve the required "
+    "separators, paragraph count, IDs, and protected markers."
+)
+
+
+@contextmanager
+def untranslated_retry_feedback(model, active=True):
+    previous = getattr(model, "_translation_retry_feedback", None)
+    if active:
+        model._translation_retry_feedback = UNTRANSLATED_RETRY_FEEDBACK
+    try:
+        yield
+    finally:
+        if previous is None:
+            model.__dict__.pop("_translation_retry_feedback", None)
+        else:
+            model._translation_retry_feedback = previous
+
 
 def translate_list_or_singles(
     model, texts, attempt=None, retry_one_by_one=None, language=None,
@@ -598,12 +620,23 @@ def translate_list_or_singles(
             )
         return result
 
-    def run():
+    needs_language_feedback = False
+
+    def run_once():
         if attempt is not None:
             return checked(attempt())
         if hasattr(model, "translate_list"):
             return checked(model.translate_list(texts))
         return checked([model.translate(text) for text in texts])
+
+    def run():
+        nonlocal needs_language_feedback
+        with untranslated_retry_feedback(model, needs_language_feedback):
+            try:
+                return run_once()
+            except UntranslatedTextError:
+                needs_language_feedback = True
+                raise
 
     if singles:
         try:

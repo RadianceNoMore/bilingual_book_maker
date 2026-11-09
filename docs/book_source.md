@@ -6,9 +6,9 @@ Txt files and srt files are plain text files. This program can translate plain t
     python3 make_book.py --book_name test_books/the_little_prince.txt --test --language zh-hans
 
 ## markdown
-Markdown files can be translated directly with `--book_name your_doc.md`; use `--prompt prompt_md.json` for the Markdown-specific prompt.
+Markdown files can be translated directly with `--book_name your_doc.md`; use `--prompt examples/prompts/prompt_md.json` for the Markdown-specific prompt.
 
-    python3 make_book.py --book_name your_doc.md --key ${openai_key} --model gpt-5-mini --prompt prompt_md.json
+    python3 make_book.py --book_name your_doc.md --key ${openai_key} --model gpt-5-mini --prompt examples/prompts/prompt_md.json
 
 PromptDown `.md` files go to `--prompt`; Markdown books go to `--book_name`.
 

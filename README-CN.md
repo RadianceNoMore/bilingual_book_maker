@@ -4,6 +4,9 @@
 
 **中文 | [English](./README.md)**
 
+使用 `--translate-filename` 可将最终 EPUB 文件名翻译为目标语言；默认保留原文件名。
+源文件副本及断点续译文件名保持不变。
+
 译本默认保存到 `./output`；使用 `--output-dir PATH`（别名 `--output_dir`）
 可指定其他目录。翻译前会将源文件复制到 `./input`，检查点和计划也保存在此处；
 可用 `--input-dir PATH` 更改目录。`--resume` 会复制原文件旁的检查点，
@@ -393,7 +396,7 @@ codex "你好，请使用bbm-plan帮我将这本书：test_books/animal_farm.epu
 
   如果你想调整 prompt，你可以使用 `--prompt` 参数。有效的占位符包括 `{text}` 和 `{language}`。你可以用以下方式配置 prompt:
 
-  - 如果您不需要设置 `system` 角色，可以这样：`--prompt "Translate {text} to {language}"` 或者 `--prompt prompt_template_sample.txt`
+  - 如果您不需要设置 `system` 角色，可以这样：`--prompt "Translate {text} to {language}"` 或者 `--prompt examples/prompts/prompt_template_sample.txt`
 
   - 如果您需要设置 `system` 角色，可以使用以下方式配置：`--prompt '{"user":"Translate {text} to {language}", "system": "You are a professional translator."}'`，或者 `--prompt prompt_template.json`。
 
@@ -606,7 +609,7 @@ python3 make_book.py --book_name test_books/animal_farm.epub --translate-tags di
 python3 make_book.py --book_name test_books/animal_farm.epub --plan-classify all
 
 # 修改prompt
-python3 make_book.py --book_name test_books/animal_farm.epub --prompt prompt_template_sample.txt
+python3 make_book.py --book_name test_books/animal_farm.epub --prompt examples/prompts/prompt_template_sample.txt
 # 或者
 python3 make_book.py --book_name test_books/animal_farm.epub --prompt "Please translate \`{text}\` to {language}"
 # 翻译 txt 文件
@@ -716,3 +719,48 @@ docker run --rm -v /path/to/your/books:/book bilingual_book_maker --book_name /b
 
 [^token]: https://platform.openai.com/account/api-keys
 [^black]: https://github.com/psf/black
+
+
+## 小说翻译与目录结构
+
+仓库布局说明见 [repository-layout.md](docs/repository-layout.md)，翻译流程见
+[translation-workflow.md](docs/translation-workflow.md)。原有根目录命令仍可使用。
+EPUB 请求默认最多 40 个文本单元或 4000 个估算源文本 token，可用
+`--request-max-units N`、`--request-max-tokens N` 调整。
+`--max-chunk-attempts N` 控制整块尝试次数（默认 5 次，包括首次请求）。
+
+
+Automatic glossary review: for EPUB session runs through an OpenAI-compatible
+API, `--glossary-auto on` uses the original context-compaction extraction prompt:
+at most 16 names/renderings per report. Normal translation chunks make no separate
+glossary-extraction requests. The final short session window is compacted before
+publishing as well, including metadata and filename translation requests.
+
+Each new entry receives three independent review requests with its proposed
+rendering, nearby original source context, and the compaction summary (treated as
+fallible supporting evidence). Two matching votes within one round settle the
+entry. If all three differ, their votes are archived and discarded for voting;
+only unresolved entries receive a fresh three-vote round. Votes from different
+rounds never combine. A partially completed round resumes its missing requests.
+Each entry is limited to `--max-chunk-attempts` rounds (default 5). Reviewers use
+the configured model in separate requests; no external reviewer or manual glossary
+is required. Agreement does not guarantee correct identity.
+
+If the original rendering passes, translation continues without replay. If the
+reviewers agree on a correction, that corrected mapping is enforced. If they agree
+on rejection without a replacement, the rejection reason guides corrective
+translation. Only original request chunks containing the rejected source term are
+retranslated; several rejected terms in one chunk cause one replay. Corrective
+passes discard their session exchanges and do not extract or review new glossary
+entries. They retain the normal alignment, language validation and chunk retry
+limits. Settled entries remain fixed and deduplicated across compactions/resume.
+
+`<book>_approved_glossary.json` stores votes, archived rounds, original request
+boundaries, the uncompacted session tail, and pending/completed repairs, bound to
+the source EPUB hash and language pair. Keep it when resuming. Repairs update saved
+body and label translations; the finished EPUB is rebuilt from original source and
+corrected caches so earlier serialized paragraphs cannot retain stale names. Old
+reviewed checkpoints remain readable; when they lack request boundaries, cached
+text is grouped using the chapter/batch plan and current request limits. Checkpoints
+without review provenance require restarting without `--resume`. Other formats
+retain review-only handoff extraction; unsupported EPUB providers fail explicitly.

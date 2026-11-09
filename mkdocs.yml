@@ -10,11 +10,13 @@ nav:
   - Home : index.md
   - Getting started: 
     - Installation: installation.md
+    - Repository layout: repository-layout.md
     - QuickStart: quickstart.md
   - Usage:
     - Model and languages: model_lang.md
     - Language tags and names: languages.md
     - Command line options: cmd.md
+    - Novel translation workflow: translation-workflow.md
     - Migrating from the old flags: migration.md
     - Translate from different source: book_source.md
     - Environment setting: env_settings.md

@@ -12,9 +12,12 @@ sections after it provide additional notes for selected workflows.
 |---|---|
 | `--book_name PATH` | Input EPUB, TXT, Markdown, SRT, or PDF path (required). |
 | `--output-dir PATH` | Directory for translated books, including temporary books. Default `./output`, relative to the current working directory. `--output_dir` is an alias. |
+| `--translate-filename` | Translate the final EPUB filename into the target language; off by default. Keeps `_bilingual.epub`, sanitizes Windows-invalid characters, and names the audit report to match. Source copies, checkpoints, and recovery EPUB names remain unchanged. Independent of `--no-translate-metadata`. Existing translated output files are protected from overwrite: move the old file or choose another output directory. Preview/test and batch-submission runs do not translate filenames. |
 | `--input-dir PATH` | Working source copies, checkpoints, and plans. Default `./input`. Existing sources and progress are preserved; different books with the same filename receive a content suffix. |
 | `--no-copy-source` | Read the original source directly and keep checkpoints beside it. By default, the source is copied into `./input` before translation. |
-| `--whole-chapter` | EPUB with an LLM: send all selected text in each XHTML chapter as one request, overriding token and unit grouping limits. Sequential chapters only; incompatible with `--accumulate-across-chapters`, `--plan-dry-run`, sentence mode, batch jobs, and retranslation. Use `--test` for a preview. The model must have enough context/output capacity. A test slice or partially resumed chapter sends only the remaining selected units. Existing cross-chapter checkpoints can continue when saved job identities match. |
+| `--request-max-units N` | EPUB dispatch cap: at most N selected units per request (default 40). Applies to body and TOC; whole-chapter bypasses body caps only. |
+| `--request-max-tokens N` | EPUB dispatch cap: estimated source tokens per request (default 4000). A single oversized unit remains intact. |
+| `--whole-chapter` | EPUB with an LLM: send all selected text in each XHTML chapter as one request, overriding body token and unit grouping limits; TOCs remain bounded. Sequential chapters only; incompatible with `--accumulate-across-chapters`, `--plan-dry-run`, sentence mode, batch jobs, and retranslation. Use `--test` for a preview. The model must have enough context/output capacity. A test slice or partially resumed chapter sends only the remaining selected units. Existing cross-chapter checkpoints can continue when saved job identities match. |
 | `--max-chunk-attempts N` | Maximum complete-chunk attempts, including the first request. Default `5`. After an EPUB batch still fails alignment, split it into smaller groups while keeping at least two units together; single-paragraph retries remain opt-in. If the smallest group still fails, save progress and stop. Provider transport retries may also occur within an attempt. |
 | `--retry-one-by-one` | Retry failed EPUB chunks as individual paragraphs instead of the default whole-chunk retry and smaller-group fallback. |
 | `--strip-obfuscated-codes on\|off` | EPUB only; default `on`. Remove confirmed obfuscated contact-code signatures from translation requests and generated EPUB text, including bilingual source text and recovery output. Ordinary advertisements remain and are translated normally. Matching is deliberately narrow; unidentified codes remain subject to normal validation. Removals are reported with document and unit locations. Original input and checkpoint job identities are unchanged. Existing checkpoints can resume with cleanup enabled; once saved with cleanup, keep it enabled when resuming. |
@@ -50,14 +53,14 @@ sections after it provide additional notes for selected workflows.
 | `--test` | Translate only a preview sample. |
 | `--test_num N` | Number of test units; default `10`. |
 | `--resume` | Continue from the loader's saved checkpoint. An EPUB checkpoint records the run's language, prompt and model; a mismatch stops the resume. Document-ordered version 3 checkpoints are supported and backed up as `.temp.bin.v3.bak` before upgrading on the next save. Older formats without stable job identities remain untouched and require the version that created them. Refused together with `--parallel-workers` and `--accumulated_num` above 1 because those workers cannot safely replay cached body batches. |
-| `--prompt VALUE_OR_FILE` | Prompt config: `user` (must contain `{text}`), `system`, and `style`. A `style` is a standing instruction said once where a window starts (the system message on the API routes, the thread instructions on codex), never repeated per request; a user-written style replaces the model's own style notes in handoff reports. A section with no native slot on a route (`system` on the `codex` format) is appended to the user message instead of dropped; a run with `--prompt` prints which sections it adopted and where. Sample: `prompt_template.json` (`style` shipped empty). |
+| `--prompt VALUE_OR_FILE` | Prompt config: `user` (must contain `{text}`), `system`, and `style`. A `style` is a standing instruction said once where a window starts (the system message on the API routes, the thread instructions on codex), never repeated per request; a user-written style overrides the stable source-fidelity default in session mode. Model-authored handoff styles are not adopted. A section with no native slot on a route (`system` on the `codex` format) is appended to the user message instead of dropped; a run with `--prompt` prints which sections it adopted and where. Sample: `prompt_template.json` (`style` shipped empty). |
 | `--temperature FLOAT` | Sampling temperature; default `1.0`. |
 | `--use_context [window\|session]` | Send earlier paragraphs as context. Bare or `window`: re-send the last few source/translation pairs (the long-standing behaviour). `session`: one append-only history, re-read at the endpoint's prompt-cache rate. |
 | `--context_paragraph_limit N` | Window mode only: context history limit. Parser default `0` means the translator default (3 paragraphs for ChatGPT), not zero history. |
 | `--context-compact-at N` | Estimated-token budget for a rolling history. In session mode the history is compacted into a handoff report at this size; minimum `500`. When unset, every session run — grouped or not, the `codex` format included — compacts at `8192`, printed at start (owner-set, September 2026, essentially the `8000` this was measured at: the fewest-seams edge of the measured band — under the *old* grouping budgets its cost sat within noise of the flat region, 9–25% over each book's own optimum, with only `20000` materially worse — up to 56% more, and the one cell where register drift appeared. Alone among the September 2026 defaults this one was *not* lowered, and the case for keeping it is continuity rather than price. Measured on a 300-unit run against the pre-September defaults, the smaller grouping budget costs +27% at `4096` and +40% at `8192`: the extra cost is the request count multiplying, and each of those requests re-reads the carried history, so a *longer* window is the dearer of the two. Lower it if session cost matters more to you than the fewest window seams). Also bounds the plan classifier's conversation on endpoints that classify over a plain session (restart there, no handoff), with or without `--use_context`. An explicit value always wins. |
 | `--no-context-compact` | Session mode only: skip the handoff report. The window still rolls over at the budget, but the next one starts empty. |
 | `--glossary FILE` / `--terminology FILE` | A file of `term → translation` lines (one per line; `#` starts a note or a comment) this run must render that way. Two names for one flag. Only the terms that occur in a request are sent with it. A missing file stops the run at parse time. Read by the openai- and codex-shaped routes for EPUB, Markdown, and PDF books; other routes warn and ignore it. |
-| `--glossary-auto on\|off` | Whether a session run also keeps the renderings its own handoff reports establish. On by default wherever a session runs (`--use_context session`, and the `codex` format's one thread); `off` asks the compact turn for a summary only. Learned terms stay in this run and in `<book>_handoff.md`, and nowhere else. |
+| `--glossary-auto on\|off` | EPUB/OpenAI session mode: review the normal compaction glossary in fresh three-vote rounds. Retranslate only chunks containing rejected terms; discard glossary learning on corrective passes. See automatic glossary review below. |
 | `--accumulated_num N` | EPUB token/character accumulation and SRT subtitle-block character batching (capped at 512 for SRT). In EPUB plan mode it is a per-request token budget: consecutive units of any length share one request up to `N` tokens (at most `--max-batch-units` units per request; half that when the endpoint verifies JSON mode but not a strict schema). Untyped, every plan run derives a default from the run's own prompt overhead — `1200` with the stock prompts, up to `1600` under a fat custom `--prompt` — halved per request on an endpoint without a strict-schema verdict, the same margin that halves the unit cap there, but never below the `800` floor (which the `1600` ceiling means it always reaches, so the sub-strict per-request budget is `800` whatever the prompt costs); session runs (`codex` included) keep the un-halved value. These are owner-set safety margins (September 2026), deliberately below the range any eval measured fault-free — see the constants in `book_maker/loader/plan.py` for what is measured and what is chosen. The run narrates the number and the route class. Pass `1` to turn grouping off. Minimum `1`. |
 | `--accumulate-across-chapters` | EPUB only. Continue a token-budget request into the next spine chapter instead of flushing at each document. Requires an explicit `--accumulated_num N` above `1`; cannot run with `--parallel-workers`. Works in tag and plan translation modes; `--plan-dry-run` does not preview these requests. |
 | `--no-translate-metadata` | Keep source EPUB TOC labels, document titles, OPF title/description/subjects and imported navigation labels. By default these are localized along with the body, so a follow-up metadata repair script is unnecessary. |
@@ -76,7 +79,7 @@ sections after it provide additional notes for selected workflows.
 
 ### Endpoint and credentials
 
-EPUB title handling sends the selected TOC and imported navigation labels as one aligned batch before chapter text. Matching body heading jobs reuse that saved title translation, and matching book metadata uses the same approved value. Fresh chunks and resumed translations are checked for dominant source scripts, likely wrong-language prose, and leaked instructions or Markdown. Language identification applies to long text in shared alphabets; short labels rely on script and contamination checks.
+EPUB title handling sends the selected TOC and imported navigation labels in bounded aligned groups before chapter text. Matching body heading jobs reuse that saved title translation, and matching book metadata uses the same approved value. Fresh chunks and resumed translations are checked for dominant source scripts, likely wrong-language prose, and leaked instructions or Markdown. Language identification applies to long text in shared alphabets; short labels rely on script and contamination checks.
 
 A route is an endpoint, not a model name.
 
@@ -217,3 +220,41 @@ output 2200 tokens and maybe 200 tokens for other messages in the system message
 
 You have to choose your own
 value, there is no way to tell if the limit is reached before sending request.
+
+See [Translation workflow](translation-workflow.md) for launcher examples, report files, and the code layout.
+
+
+Automatic glossary review: for EPUB session runs through an OpenAI-compatible
+API, `--glossary-auto on` uses the original context-compaction extraction prompt:
+at most 16 names/renderings per report. Normal translation chunks make no separate
+glossary-extraction requests. The final short session window is compacted before
+publishing as well, including metadata and filename translation requests.
+
+Each new entry receives three independent review requests with its proposed
+rendering, nearby original source context, and the compaction summary (treated as
+fallible supporting evidence). Two matching votes within one round settle the
+entry. If all three differ, their votes are archived and discarded for voting;
+only unresolved entries receive a fresh three-vote round. Votes from different
+rounds never combine. A partially completed round resumes its missing requests.
+Each entry is limited to `--max-chunk-attempts` rounds (default 5). Reviewers use
+the configured model in separate requests; no external reviewer or manual glossary
+is required. Agreement does not guarantee correct identity.
+
+If the original rendering passes, translation continues without replay. If the
+reviewers agree on a correction, that corrected mapping is enforced. If they agree
+on rejection without a replacement, the rejection reason guides corrective
+translation. Only original request chunks containing the rejected source term are
+retranslated; several rejected terms in one chunk cause one replay. Corrective
+passes discard their session exchanges and do not extract or review new glossary
+entries. They retain the normal alignment, language validation and chunk retry
+limits. Settled entries remain fixed and deduplicated across compactions/resume.
+
+`<book>_approved_glossary.json` stores votes, archived rounds, original request
+boundaries, the uncompacted session tail, and pending/completed repairs, bound to
+the source EPUB hash and language pair. Keep it when resuming. Repairs update saved
+body and label translations; the finished EPUB is rebuilt from original source and
+corrected caches so earlier serialized paragraphs cannot retain stale names. Old
+reviewed checkpoints remain readable; when they lack request boundaries, cached
+text is grouped using the chapter/batch plan and current request limits. Checkpoints
+without review provenance require restarting without `--resume`. Other formats
+retain review-only handoff extraction; unsupported EPUB providers fail explicitly.

@@ -164,12 +164,13 @@ def _detected_language(text):
     return ranked[0].lang.lower()
 
 
-def untranslated_reason(source, reply, target_language, source_language=None):
+def untranslated_reason(source, reply, target_language, source_language=None, *, detect_language=True):
     """Return a high-confidence reason to retry, or None when it passes.
 
     Source-only writing systems are rejected when they make up at least half
     of the reply's letters. When source and target share an alphabet, a
-    deterministic language identifier checks only substantial prose.
+    deterministic language identifier checks only substantial prose. Offline
+    final audits can skip that expensive pass; translation-time checks use it.
     """
     if not isinstance(reply, str):
         return None
@@ -220,7 +221,7 @@ def untranslated_reason(source, reply, target_language, source_language=None):
     ):
         return "reply is Han-only and lacks the kana normally present in Japanese prose"
 
-    detected = _detected_language(translated)
+    detected = _detected_language(translated) if detect_language else None
     same_language = detected == target or (
         target in {"no", "nb", "nn"} and detected in {"no", "nb", "nn"}
     ) or (target == "zh" and detected in {"zh", "zh-cn", "zh-tw"})

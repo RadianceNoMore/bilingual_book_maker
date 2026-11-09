@@ -445,7 +445,8 @@ class TestFixedStyle:
         )
         t.translate("a" * 200, needprint=False)
         t.translate("b" * 200, needprint=False)
-        assert "style" not in t.server.turns[-1]["text"].lower()
+        from book_maker.session_context import _STYLE_REQUEST
+        assert _STYLE_REQUEST not in t.server.turns[-1]["text"]
 
     def test_the_fixed_style_is_written_into_the_report(self, tmp_path):
         path = tmp_path / "h.md"
