@@ -101,18 +101,17 @@ def _prompt_data(prompt):
     return json.loads(prompt.rsplit("\n", 1)[-1])
 
 
-def test_text194_second_reply_context_only_exclusion_is_accepted(tmp_path):
-    workflow, model, window = _workflow(tmp_path, [REPLIES[0], REPLIES[1]])
+def test_text194_first_reply_context_only_name_is_discarded(tmp_path):
+    workflow, model, window = _workflow(tmp_path, [REPLIES[0]])
 
     record, prepared, _spans = workflow.prepare_source_window(
         window, source_language="Chinese"
     )
 
-    assert len(model.requests) == 2
-    data = _prompt_data(model.requests[1])
+    assert len(model.requests) == 1
+    data = _prompt_data(model.requests[0])
     assert "哈基黑" in data["context_only_labels"]
     assert "哈基黑" not in data["retry_candidates"]
-    assert "操祈" in data["retry_candidates"]
     assert "accepted_candidates" not in data
     assert "哈基黑" not in record["extracted_names"]
     assert "操祈" in record["extracted_names"]
@@ -250,7 +249,7 @@ def test_literal_label_cannot_be_excluded_without_being_a_retry_candidate():
         validate_extraction(raw, window)
 
 
-def test_undeclared_context_only_exclusion_is_rejected():
+def test_unrelated_absent_exclusion_is_ignored_and_not_protected():
     window = _window()
     raw = json.dumps(
         {
@@ -260,8 +259,15 @@ def test_undeclared_context_only_exclusion_is_rejected():
         },
         ensure_ascii=False,
     )
-    with pytest.raises(SourceWindowError, match="neither"):
-        validate_extraction(raw, window, context_only={"哈基黑"})
+    ignored = []
+    extracted = validate_extraction(
+        raw,
+        window,
+        context_only={"哈基黑"},
+        ignored_exclusions=ignored,
+    )
+    assert [row["source"] for row in extracted] == ["一色"]
+    assert ignored == ["不存在"]
 
 
 def test_context_only_labels_are_prior_summary_labels_absent_here():

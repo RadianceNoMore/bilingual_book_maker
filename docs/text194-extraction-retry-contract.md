@@ -5,6 +5,12 @@
 **Prepared:** 2026-11-05 (Asia/Bangkok)  
 **Status:** fixed and verified; changes are uncommitted.
 
+> Historical incident notes: this records the text194 behavior and its tests.
+> Text205 later changed one narrow rule: unrelated but valid exclusions absent
+> from the current source are ignored and do not count as decisions. The current
+> contract is documented in `protected-names.md` and
+> `text205-ignored-exclusion-fix.md`.
+
 ## 1. What failed
 
 A fresh run completed `w000001` and `w000002` and saved **296 accepted translation units**. Extraction for `w000003` then failed all three attempts:
@@ -59,7 +65,7 @@ The run stopped before any body translation of `w000003`.
 The retry contract had no way to record a **context-only** name:
 
 1. `names` must be literal in the current source. `哈基黑` is not, so attempt 1 correctly failed.
-2. `excluded_candidates` was allowed to contain **only supplied retry candidates**. `哈基黑` was never a candidate because it is not literal, so attempt 2's honest exclusion was rejected.
+2. At the time, `excluded_candidates` was allowed to contain **only supplied retry candidates**. `哈基黑` was never a candidate because it is not literal, so attempt 2's honest exclusion was rejected. Text205 later made other valid absent extras inert.
 3. The model then tried to simplify and dropped `操祈`, a real exact-source candidate, so attempt 3 failed the missing-candidate guard.
 
 The loop bounced between "nonliteral name" and "invalid exclusion" until the budget ran out. This was a contract defect, not a provider-capacity problem.
@@ -150,7 +156,9 @@ The 11 text194 tests cover:
 6. A wrong-window prior reply does not seed candidates.
 7. An invalid legacy citation prior reply does not seed candidates.
 8. A literal label cannot be excluded unless it is a retry candidate.
-9. An undeclared context-only exclusion is rejected.
+9. Under the text194 contract, an undeclared context-only exclusion was
+   rejected. Text205 supersedes this behavior for unrelated absent extras; they
+   are now ignored and cannot satisfy required retry decisions.
 10. `context_only_labels` is computed from prior-summary markers and literal presence.
 11. Cross-window diagnostics do not seed candidates.
 

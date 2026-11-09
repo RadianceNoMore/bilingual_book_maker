@@ -203,7 +203,7 @@ class FakeMarkerModel:
                 "key": row["key"],
                 "label": row["label"],
                 "target": self.mapping_targets.get(
-                    row["label"], f"目标{row['label']}"
+                    row["label"], {"Alice": "爱丽丝", "Bob": "鲍勃", "Carol": "卡萝尔", "Dave": "戴夫"}.get(row["label"], "目标")
                 ),
             }
             for row in requested
@@ -495,6 +495,7 @@ def test_tiny_marker_run_interrupts_resumes_and_finishes(tmp_path):
     assert output.exists()
     assert not recovery.exists()
     _assert_no_tokens(output, resumed.translate_model)
+
     state = read_state(output)
     assert state["run"]["status"] == "complete"
     assert state["run"]["run_id"] == first_run_id
@@ -509,7 +510,7 @@ def test_tiny_marker_run_interrupts_resumes_and_finishes(tmp_path):
         css = archive.read("EPUB/bbm-names.css").decode()
         assert STATE_PATH in archive.namelist()
     assert 'class="bbm-name"' in chapter
-    assert 'content: "目标Alice"' in css
+    assert 'content: "爱丽丝"' in css
 
     # A second fresh run must ignore the completed output.  Interrupt it, then
     # prove resume continues *that* recovery rather than reporting the old book
@@ -538,6 +539,69 @@ def test_tiny_marker_run_interrupts_resumes_and_finishes(tmp_path):
         )
     ]
     assert leftovers == []
+
+
+def test_provider_refusal_on_later_source_chunk_saves_prior_and_stops(tmp_path):
+    from book_maker.provider_refusal import ProviderRefusal
+
+    class RefuseSecondChunkModel(FakeMarkerModel):
+        default_translations = {
+            **TRANSLATIONS,
+            "Dave left.": "${Dave}离开了。",
+        }
+
+        def translate_marker_units(
+            self, payload, feedback="", *, premarked=False, context=None
+        ):
+            if type(self).calls == 0:
+                return super().translate_marker_units(
+                    payload, feedback, premarked=premarked, context=context
+                )
+            type(self).calls += 1
+            self.requests.append(payload)
+            self._protected_last_response = "Simulated policy refusal."
+            self._protected_response_metadata = {
+                "window_id": "w000001",
+                "chunk": 2,
+                "chunk_count": 3,
+            }
+            raise ProviderRefusal("simulated provider refusal")
+
+    source = tmp_path / "book.epub"
+    _write_three_paragraph_book(source)
+    ongoing = tmp_path / "ongoing"
+    RefuseSecondChunkModel.reset()
+    loader = _loader(source, resume=False, model=RefuseSecondChunkModel)
+
+    with pytest.raises(SystemExit) as stopped:
+        loader.make_bilingual_book()
+
+    assert stopped.value.code == 1
+    assert RefuseSecondChunkModel.calls == 2
+    assert len(loader.translate_model.requests) == 2
+    recovery = next(ongoing.glob("book-*_bilingual_temp.epub"))
+    state = read_state(recovery)
+    window = state["source_windows"]["windows"][0]
+
+    assert window["status"] == "translating"
+    assert len(window["units"]) == 3
+    assert window["accepted_unit_ids"] == [window["units"][0]["unit_id"]]
+    assert window["units"][0]["translation"] == "${Alice}遇见了${Bob}。"
+    assert window["units"][1].get("translation") is None
+    assert window["units"][2].get("translation") is None
+    assert state["source_windows"]["current_summary"] == ""
+    assert state["source_windows"]["summary_pending_window"] is None
+    recovery_entries = state["paragraph_recovery"]["entries"]
+    assert len(recovery_entries) == 1
+    assert recovery_entries[0]["identity"] == window["units"][0]["unit_id"]
+    assert recovery_entries[0]["master"] == "${Alice}遇见了${Bob}。"
+
+    failure = state["diagnostics"]["failures"][-1]
+    assert failure["stage"] == "window-translation"
+    assert "w000001, chunk 2/3" in failure["reason"]
+    assert "simulated provider refusal" in failure["reason"]
+    assert failure["response_metadata"]["chunk"] == 2
+    assert failure["response_metadata"]["chunk_count"] == 3
 
 
 def test_each_window_extracts_translates_then_updates_cumulative_summary(tmp_path):
@@ -588,8 +652,8 @@ def test_source_backed_navigation_is_captured_and_editable(tmp_path):
 
     with zipfile.ZipFile(output) as archive:
         nav = archive.read("EPUB/nav.xhtml").decode()
-    assert "目标Alice" in nav
-    assert "目标Bob" in nav
+    assert "爱丽丝" in nav
+    assert "鲍勃" in nav
 
     from book_maker.marker_bundle import apply_catalogue_update
 
@@ -605,10 +669,10 @@ def test_source_backed_navigation_is_captured_and_editable(tmp_path):
     assert "Alicia" in ncx
     assert "<title>Alicia" in chapter
     assert 'class="bbm-name"' in chapter
-    assert "目标Alice" not in chapter
+    assert "爱丽丝" not in chapter
     assert "Alicia" in css
-    assert "目标Alice" not in css
-    assert "目标Alice" not in nav
+    assert "爱丽丝" not in css
+    assert "爱丽丝" not in nav
 
 
 COLLISION_TRANSLATIONS = {

@@ -136,6 +136,25 @@ def _script_counts(text):
     return counts
 
 
+_WORD_TOKEN = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def _low_information_language_sample(text):
+    """Whether a language-identification sample carries too little variety.
+
+    Statistical detectors can assign a confident wrong language to a short
+    phrase repeated many times (for example an English name repeated in a
+    heading). Such a sample cannot support a reliable language decision.
+    """
+    words = _WORD_TOKEN.findall(text.casefold())
+    if not words:
+        return True
+    # Repeated short phrases and single long words carry too little lexical
+    # information for a reliable statistical language decision. Diverse short
+    # prose still reaches the detector.
+    return len(set(words)) <= max(2, len(words) // 10)
+
+
 @lru_cache(maxsize=1)
 def _language_detector():
     """Load the optional statistical detector once, with repeatable results."""
@@ -151,6 +170,8 @@ def _detected_language(text):
     # Language identification is noisy on headings and short names. Restrict
     # it to substantial prose and require a high-confidence result.
     if sum(char.isalpha() for char in text) < 80:
+        return None
+    if _low_information_language_sample(text):
         return None
     detect_langs = _language_detector()
     if detect_langs is None:

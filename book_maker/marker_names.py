@@ -356,6 +356,53 @@ def validate_display_target(value):
         raise MarkerError("Display mapping must not contain markup")
     if any(ord(char) < 0x20 and char not in "\t" for char in value):
         raise MarkerError("Display mapping contains a control character")
+    if not any(char.isalnum() for char in value):
+        raise MarkerError("Display mapping must contain a letter or digit")
+    return value
+
+
+def validate_display_target_for_language(
+    label, value, target_language, *, require_known_language=False
+):
+    """Reject source-script leakage and unsupported target scripts.
+
+    The fallback path passes ``require_known_language=True`` so an unknown or
+    missing target language fails closed.  Ordinary mapping scheduling keeps
+    the historical syntax-only behavior when the language is unknown.
+    """
+    value = validate_display_target(value)
+    from book_maker.translation_quality import (
+        _TARGET_SCRIPTS,
+        _code,
+        _script_counts,
+    )
+
+    target_code = _code(target_language)
+    allowed_scripts = _TARGET_SCRIPTS.get(target_code, set())
+    if not allowed_scripts:
+        if require_known_language:
+            raise MarkerError(
+                "Display mapping cannot be accepted without a known target "
+                f"language (got {target_language!r})"
+            )
+        return value
+    source_only = set(_script_counts(label)) - allowed_scripts
+    leaked_source_scripts = source_only & set(_script_counts(value))
+    if leaked_source_scripts:
+        raise MarkerError(
+            "Display mapping for "
+            f"{label!r} keeps source-script text "
+            f"({', '.join(sorted(leaked_source_scripts))}) unsupported by "
+            f"target language {target_code}"
+        )
+    unsupported_target_scripts = set(_script_counts(value)) - allowed_scripts
+    if unsupported_target_scripts:
+        raise MarkerError(
+            "Display mapping for "
+            f"{label!r} contains target-script text "
+            f"({', '.join(sorted(unsupported_target_scripts))}) unsupported by "
+            f"target language {target_code}"
+        )
     return value
 
 

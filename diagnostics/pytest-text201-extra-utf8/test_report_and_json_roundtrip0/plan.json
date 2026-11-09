@@ -1,0 +1,747 @@
+{
+ "coverage": 0.9999851895734597,
+ "total_chars": 202560,
+ "translate_chars": 202557,
+ "skipped": {
+  "excluded-tag": 3
+ },
+ "exclude_tags": [
+  "sup",
+  "code"
+ ],
+ "poetry_group_size": 8,
+ "token_budget": null,
+ "batch_units": 16,
+ "book_sha256": "8b3f1a9ce58d4e720d226cc0a1f96db9e136884de8953b3a5e3f916c278e22c8",
+ "planning_settings": {
+  "exclude_tags": [
+   "code",
+   "sup"
+  ],
+  "only_files": [],
+  "exclude_files": []
+ },
+ "schema_version": 7,
+ "signatures": [
+  {
+   "key": "block:p.calibre_13",
+   "scope": "block",
+   "units": 285,
+   "chars": 188081,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 92.9,
+   "mean_chars": 659.9,
+   "samples": [
+    "Any fairminded person with journalistic experience will admit that during this w…",
+    "Now, as it turned out, the Rebellion was achieved much earlier and more easily t…",
+    "The whole farm was deeply divided on the subject of the windmill. Snowball did n…",
+    "Four days later, in the late afternoon, Napoleon ordered all the animals to asse…",
+    "It is important to distinguish between the kind of censorship that the English l…"
+   ]
+  },
+  {
+   "key": "block:p.calibre_10",
+   "scope": "block",
+   "units": 12,
+   "chars": 5035,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 2.5,
+   "mean_chars": 419.6,
+   "samples": [
+    "This book was first thought of, so far as the central idea goes, in 1937, but wa…",
+    "MR. JONES, of the Manor Farm, had locked the hen-houses for the night, but was t…",
+    "HOW they toiled and sweated to get the hay in! But their efforts were rewarded, …",
+    "ALL that year the animals worked like slaves. But they were happy in their work;…",
+    "A FEW days later, when the terror caused by the executions had died down, some o…"
+   ]
+  },
+  {
+   "key": "block:p.calibre_12",
+   "scope": "block",
+   "units": 7,
+   "chars": 4844,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 2.4,
+   "mean_chars": 692.0,
+   "samples": [
+    "This kind of thing is not a good symptom. Obviously it is not desirable that a g…",
+    "The word ancient emphasises the fact that intellectual freedom is a deep-rooted …",
+    "The singing of this song threw the animals into the wildest excitement. Almost b…",
+    "and this was sung every Sunday morning after the hoisting of the flag. But someh…",
+    "Napoleon approved of this poem and caused it to be inscribed on the wall of the …"
+   ]
+  },
+  {
+   "key": "block:blockquote.calibre_17",
+   "scope": "block",
+   "units": 40,
+   "chars": 1183,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.6,
+   "mean_chars": 29.6,
+   "samples": [
+    "Beasts of every land and clime,",
+    "Bit and spur shall rust forever,",
+    "On the day that sets us free.",
+    "Fire when I gaze at thy",
+    "Full belly twice a day, clean straw to roll upon;"
+   ]
+  },
+  {
+   "key": "inline:span.calibre7",
+   "scope": "inline",
+   "units": 42,
+   "chars": 1142,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.6,
+   "mean_chars": 27.2,
+   "samples": [
+    "R.",
+    "OW",
+    "FEW",
+    "HE",
+    "bankers of the nineteenth century to push their sons into a Public School. At su…"
+   ],
+   "parents": [
+    {
+     "key": "block:p.calibre_10",
+     "units": 11
+    },
+    {
+     "key": "block:p.calibre_20",
+     "units": 10
+    },
+    {
+     "key": "block:p.calibre_21",
+     "units": 10
+    }
+   ]
+  },
+  {
+   "key": "inline:span.italic",
+   "scope": "inline",
+   "units": 70,
+   "chars": 918,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.5,
+   "mean_chars": 13.1,
+   "samples": [
+    "George Orwell",
+    "Ten Days that Shook the World",
+    "Critical Essays",
+    "Every Man His Own Bricklayer",
+    "One Thousand Useful Things to Do About the House"
+   ],
+   "parents": [
+    {
+     "key": "block:p.calibre_13",
+     "units": 57
+    },
+    {
+     "key": "block:p.calibre_12",
+     "units": 5
+    },
+    {
+     "key": "block:p.calibre_6",
+     "units": 3
+    }
+   ]
+  },
+  {
+   "key": "block:blockquote.calibre_11",
+   "scope": "block",
+   "units": 1,
+   "chars": 900,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.4,
+   "mean_chars": 900.0,
+   "samples": [
+    "I mentioned the reaction I had had from an important official in the Ministry of…"
+   ]
+  },
+  {
+   "key": "block:p.calibre_23",
+   "scope": "block",
+   "units": 1,
+   "chars": 766,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.4,
+   "mean_chars": 766.0,
+   "samples": [
+    "** These are not public “national schools”, but something quite the opposite: ex…"
+   ]
+  },
+  {
+   "key": "block:p.calibre_6",
+   "scope": "block",
+   "units": 2,
+   "chars": 410,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.2,
+   "mean_chars": 205.0,
+   "samples": [
+    "This e-book was created for MobileRead (www.mobileread.com).",
+    "The text is based on the Project Gutenberg Australia [PGA] version of “Animal Fa…"
+   ]
+  },
+  {
+   "key": "inline:span.calibre5",
+   "scope": "inline",
+   "units": 16,
+   "chars": 410,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.2,
+   "mean_chars": 25.6,
+   "samples": [
+    "This",
+    "www.mobileread.com",
+    "based",
+    "). The two prefaces come from",
+    "-book does not reproduce any particular printed edition, but has gone through it…"
+   ],
+   "parents": [
+    {
+     "key": "block:p.calibre_6",
+     "units": 16
+    }
+   ]
+  },
+  {
+   "key": "block:blockquote.calibre_14",
+   "scope": "block",
+   "units": 12,
+   "chars": 370,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.2,
+   "mean_chars": 30.8,
+   "samples": [
+    "By the known rules of ancient liberty.",
+    "Soon or late the day is coming,",
+    "Riches more than mind can picture,",
+    "For that day we all must labour,",
+    "Bright will shine the fields of England,"
+   ]
+  },
+  {
+   "key": "block:li.calibre_19",
+   "scope": "block",
+   "units": 7,
+   "chars": 246,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 35.1,
+   "samples": [
+    "Whatever goes upon two legs is an enemy.",
+    "Whatever goes upon four legs, or has wings, is a friend.",
+    "No animal shall wear clothes.",
+    "No animal shall drink alcohol.",
+    "No animal shall kill any other animal."
+   ]
+  },
+  {
+   "key": "inline:span.calibre_4",
+   "scope": "inline",
+   "units": 55,
+   "chars": 231,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 4.2,
+   "samples": [
+    "www.ericseat.com",
+    "OVER",
+    "HE",
+    "E",
+    "www.mobileread.com"
+   ],
+   "parents": [
+    {
+     "key": "block:p.calibre_21",
+     "units": 30
+    },
+    {
+     "key": "block:p.calibre_20",
+     "units": 20
+    },
+    {
+     "key": "block:p.calibre_6",
+     "units": 4
+    }
+   ]
+  },
+  {
+   "key": "inline:span.bold",
+   "scope": "inline",
+   "units": 40,
+   "chars": 217,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 5.4,
+   "samples": [
+    "Animal Farm:",
+    "Preface to the Ukrainian Edition",
+    "T",
+    "A",
+    "X"
+   ],
+   "parents": [
+    {
+     "key": "block:blockquote.calibre_7",
+     "units": 23
+    },
+    {
+     "key": "block:p.calibre_10",
+     "units": 10
+    },
+    {
+     "key": "block:p.calibre_",
+     "units": 2
+    }
+   ]
+  },
+  {
+   "key": "inline:span.calibre2",
+   "scope": "inline",
+   "units": 35,
+   "chars": 190,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 5.4,
+   "samples": [
+    "Animal Farm:",
+    "Chapter",
+    "T",
+    "V",
+    "Preface to the Ukrainian Edition"
+   ],
+   "parents": [
+    {
+     "key": "block:blockquote.calibre_7",
+     "units": 23
+    },
+    {
+     "key": "block:p.calibre_10",
+     "units": 10
+    },
+    {
+     "key": "block:p.calibre_",
+     "units": 2
+    }
+   ]
+  },
+  {
+   "key": "block:p.calibre_22",
+   "scope": "block",
+   "units": 1,
+   "chars": 180,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 180.0,
+   "samples": [
+    "* It is not quite clear whether this suggested modification is Mr. . . .’s own i…"
+   ]
+  },
+  {
+   "key": "inline:span.calibre_9",
+   "scope": "inline",
+   "units": 24,
+   "chars": 162,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 6.8,
+   "samples": [
+    "The Freedom of the Press",
+    "I",
+    "IV",
+    "VII",
+    "Preface to the Ukrainian Edition"
+   ],
+   "parents": [
+    {
+     "key": "block:blockquote.calibre_7",
+     "units": 23
+    },
+    {
+     "key": "block:p.calibre_1",
+     "units": 1
+    }
+   ]
+  },
+  {
+   "key": "block:blockquote.calibre_7",
+   "scope": "block",
+   "units": 13,
+   "chars": 155,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 11.9,
+   "samples": [
+    "The Freedom of the Press",
+    "Chapter I",
+    "Chapter IV",
+    "Chapter VI",
+    "Preface to the Ukrainian Edition"
+   ]
+  },
+  {
+   "key": "inline:span.calibre_8",
+   "scope": "inline",
+   "units": 14,
+   "chars": 141,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 10.1,
+   "samples": [
+    "The Freedom of the Press",
+    "Preface to the Ukrainian Edition",
+    "Chapter",
+    "THE END",
+    "Contents"
+   ],
+   "parents": [
+    {
+     "key": "block:blockquote.calibre_7",
+     "units": 13
+    },
+    {
+     "key": "block:p.calibre_1",
+     "units": 1
+    }
+   ]
+  },
+  {
+   "key": "block:p.calibre_2",
+   "scope": "block",
+   "units": 4,
+   "chars": 136,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 34.0,
+   "samples": [
+    "Cover illustration by Eric Seat",
+    "(www.ericseat.com)",
+    "THE SEVEN COMMANDMENTS",
+    "ALL ANIMALS ARE EQUAL BUT SOME ANIMALS ARE MORE EQUAL THAN OTHERS"
+   ]
+  },
+  {
+   "key": "inline:span.underline",
+   "scope": "inline",
+   "units": 35,
+   "chars": 107,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.1,
+   "mean_chars": 3.1,
+   "samples": [
+    "www.ericseat.com",
+    "Google Books",
+    "F",
+    "II",
+    "www.mobileread.com"
+   ],
+   "parents": [
+    {
+     "key": "block:p.calibre_21",
+     "units": 20
+    },
+    {
+     "key": "block:p.calibre_20",
+     "units": 10
+    },
+    {
+     "key": "block:p.calibre_6",
+     "units": 4
+    }
+   ]
+  },
+  {
+   "key": "block:p.calibre_21",
+   "scope": "block",
+   "units": 10,
+   "chars": 91,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 9.1,
+   "samples": [
+    "CHAPTER I",
+    "CHAPTER III",
+    "CHAPTER V",
+    "CHAPTER VII",
+    "CHAPTER VIII"
+   ]
+  },
+  {
+   "key": "block:p.calibre_20",
+   "scope": "block",
+   "units": 5,
+   "chars": 74,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 14.8,
+   "samples": [
+    "COVER",
+    "TITLE PAGE",
+    "CONTENTS",
+    "THE FREEDOM OF THE PRESS",
+    "PREFACE TO THE UKRAINIAN EDITION"
+   ]
+  },
+  {
+   "key": "inline:span.calibre4",
+   "scope": "inline",
+   "units": 31,
+   "chars": 45,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 1.5,
+   "samples": [
+    "1945",
+    "P",
+    "E",
+    "IV",
+    "VII"
+   ],
+   "parents": [
+    {
+     "key": "block:p.calibre_21",
+     "units": 20
+    },
+    {
+     "key": "block:p.calibre_20",
+     "units": 10
+    },
+    {
+     "key": "block:p.calibre_2 #num",
+     "units": 1
+    }
+   ]
+  },
+  {
+   "key": "block:p.calibre_15",
+   "scope": "block",
+   "units": 1,
+   "chars": 29,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 29.0,
+   "samples": [
+    "November 1943 – February 1944"
+   ]
+  },
+  {
+   "key": "block:p.calibre_",
+   "scope": "block",
+   "units": 2,
+   "chars": 25,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 12.5,
+   "samples": [
+    "Animal Farm:",
+    "A Fairy Story"
+   ]
+  },
+  {
+   "key": "block:p.calibre_1",
+   "scope": "block",
+   "units": 2,
+   "chars": 20,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 10.0,
+   "samples": [
+    "George Orwell",
+    "THE END"
+   ]
+  },
+  {
+   "key": "inline:span.calibre3",
+   "scope": "inline",
+   "units": 2,
+   "chars": 20,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 10.0,
+   "samples": [
+    "George Orwell",
+    "THE END"
+   ],
+   "parents": [
+    {
+     "key": "block:p.calibre_1",
+     "units": 2
+    }
+   ]
+  },
+  {
+   "key": "inline:span.calibre_16",
+   "scope": "inline",
+   "units": 10,
+   "chars": 10,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 1.0,
+   "samples": [
+    "M",
+    "T",
+    "H",
+    "A",
+    "I"
+   ],
+   "parents": [
+    {
+     "key": "block:p.calibre_10",
+     "units": 10
+    }
+   ]
+  },
+  {
+   "key": "block:p.calibre_15 #num",
+   "scope": "block",
+   "units": 2,
+   "chars": 8,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 4.0,
+   "samples": [
+    "1945",
+    "1947"
+   ]
+  },
+  {
+   "key": "block:p.calibre_2 #num",
+   "scope": "block",
+   "units": 1,
+   "chars": 4,
+   "conditional_css": [],
+   "action": null,
+   "decided_by": null,
+   "content_type": null,
+   "disposition": null,
+   "pct": 0.0,
+   "mean_chars": 4.0,
+   "samples": [
+    "1945"
+   ]
+  }
+ ]
+}

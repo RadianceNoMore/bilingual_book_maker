@@ -104,6 +104,8 @@ def test_extraction_prompt_requests_names_without_provider_citations():
     prompt = source_window_prompt(window, "", "Japanese")
     example = '{"window_id":"...","names":["exact spelling"],"excluded_candidates":[]}'
     assert example in prompt
+    assert "arrays must be disjoint" in prompt
+    assert "Each retry candidate gets exactly one decision" in prompt
     data = json.loads(prompt.rsplit("\n", 1)[-1])
     assert data["source_units"] == [unit.source]
     assert "units" not in data
@@ -204,7 +206,7 @@ def test_resumed_extraction_uses_one_contract_and_hashes_actual_retry(tmp_path, 
     assert json.loads(requests[0].rsplit("\n", 1)[-1])["retry_candidates"] == ["美琴"]
     assert "previous_validation_error" in json.loads(requests[1].rsplit("\n", 1)[-1])
     assert record["extraction_request_sha256"] == sha256(requests[1].encode()).hexdigest()
-    assert record["extraction_prompt_version"] == 3
+    assert record["extraction_prompt_version"] == 9
     assert prepared["p1"] == "${御坂美琴}看着${美琴}。"
     assert set(workflow.catalogue) == {"御坂美琴", "美琴"}
     failure = workflow.state["diagnostics"]["failures"][-1]

@@ -241,7 +241,10 @@ def validate_state(state):
         plan = windows.get("plan", [])
         records = windows.get("windows", [])
         auxiliary = windows.get("auxiliary", [])
-        if not isinstance(plan, list) or not isinstance(records, list) or not isinstance(auxiliary, list):
+        extraction_retries = windows.get("extraction_retries", [])
+        if (not isinstance(plan, list) or not isinstance(records, list)
+                or not isinstance(auxiliary, list)
+                or not isinstance(extraction_retries, list)):
             raise BundleError("Source-window plan or records are malformed")
         plan_ids = set()
         plan_by_id = {}
@@ -262,6 +265,53 @@ def validate_state(state):
             ):
                 raise BundleError("Source-window plan row has no source coverage")
             plan_by_id[row["window_id"]] = row
+        retry_ids = set()
+        if extraction_retries:
+            from book_maker.source_windows import extraction_retry_state_digest
+
+        for retry in extraction_retries:
+            if not isinstance(retry, dict) or retry.get("window_id") not in plan_by_id:
+                raise BundleError("Source-window extraction retry state is malformed")
+            identity = retry["window_id"]
+            if identity in retry_ids:
+                raise BundleError("Source-window extraction retry state is duplicated")
+            retry_ids.add(identity)
+            if retry.get("source_sha256") != plan_by_id[identity]["source_sha256"]:
+                raise BundleError(
+                    "Source-window extraction retry state belongs to different source"
+                )
+            candidates = retry.get("retry_candidates")
+            unverified = retry.get("unverified_name_suggestions")
+            if not isinstance(candidates, list) or not isinstance(unverified, list):
+                raise BundleError("Source-window extraction retry labels are malformed")
+            for labels in (candidates, unverified):
+                if any(
+                    not isinstance(label, str)
+                    or not label
+                    or label != label.strip()
+                    or any(char in label for char in "${}")
+                    or any(ord(char) < 0x20 for char in label)
+                    for label in labels
+                ) or len(labels) != len(set(labels)):
+                    raise BundleError("Source-window extraction retry labels are invalid")
+            if set(candidates).intersection(unverified):
+                raise BundleError(
+                    "Source-window retry candidates overlap unverified suggestions"
+                )
+            retry_digest = retry.get("retry_state_sha256")
+            if (
+                not isinstance(retry_digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", retry_digest)
+                or retry_digest != extraction_retry_state_digest(
+                    identity,
+                    retry["source_sha256"],
+                    candidates,
+                    unverified,
+                )
+            ):
+                raise BundleError(
+                    "Source-window extraction retry state failed its integrity check"
+                )
         record_ids = set()
         for record in records:
             if not isinstance(record, dict) or record.get("window_id") not in plan_ids:

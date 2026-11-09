@@ -85,13 +85,44 @@ spellings, extra keys, and malformed or truncated JSON stop before body
 translation. An explicit empty names array means no names were found.
 
 Retries use the same schema and supply grounded candidates from earlier
-rejected responses. Each candidate must be returned as a name or explicitly
-excluded; an absent exclusions field is accepted when no candidate remains
-undecided. Rejected responses never directly populate the catalogue. Resume
+well-formed rejected responses. Repeated exact-source candidate exclusions,
+contradictory name/exclusion decisions, invalid name rows, and exclusions
+hiding a current-source literal without a prior candidate cannot seed retry
+state. Repeated optional absent exclusions are normalized and never become
+retry evidence. Each
+candidate must be returned as a name or explicitly excluded; an absent
+exclusions field is accepted when no candidate remains undecided. Rejected
+responses never directly populate the catalogue. Resume
 recovers candidates only from requests matching the exact ordered window
 source. The preparation record hashes the actual successful request, including
 its retry data. A malformed response may retry within the bounded extraction
 budget; syntactically damaged responses are not salvaged into approved names.
+
+Retries keep exact-source candidates separate from unverified name suggestions.
+An unverified suggestion is a valid string proposed in `names` by an earlier
+reply but absent from every current-window source unit. It may be omitted on
+retry (an implicit discard) or explicitly excluded; it can never be accepted as
+a name or added to the catalogue.
+The source-occurrence rule applies to proposed names and to exclusions of
+context-only or unverified labels: those labels must be absent from the current
+window. A previously recorded unverified suggestion repeated in both `names`
+and `excluded_candidates` is discarded and does not erase other grounded
+evidence in that reply. The deliberate exception is an exact-source retry
+candidate, which the model may explicitly exclude after an earlier response
+identified it as a candidate. Any other syntactically valid exclusion that is
+absent from the window is inert: it is ignored, does not enter the catalogue,
+and does not satisfy a required exact-source candidate decision. Such an extra
+does not invalidate otherwise well-formed name evidence. Malformed exclusions,
+repeated exact-source candidate exclusions, other name/exclusion contradictions,
+and attempts to exclude a current-source literal without a supplied candidate
+still fail validation. Retry candidates and
+unverified suggestions are checkpointed separately from bounded diagnostics,
+so a truncated or evicted transcript does not lose them. Resume also reconstructs
+compatible retry evidence from diagnostics only when the saved request matches
+the exact ordered source window. Each checkpoint row has a consistency checksum,
+and resume verifies that candidates occur in the window while unverified
+suggestions do not. The checksum detects accidental row changes; it is not keyed
+authentication, so recovery EPUBs are treated as trusted local state.
 
 Once prepared, each exact label is added to the embedded catalogue before the
 first translation chunk. Existing labels reuse their stable SHA-256 key.

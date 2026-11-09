@@ -6,8 +6,14 @@ from types import SimpleNamespace
 import pytest
 from lxml import etree
 
-from book_maker.marker_names import MarkerError, WINDOW_WORKFLOW, validate_batch
+from book_maker.marker_names import (
+    MarkerError,
+    WINDOW_WORKFLOW,
+    marker_key,
+    validate_batch,
+)
 from book_maker.marker_workflow import (
+    ContextRepairPending,
     MarkerValidationError,
     MarkerWorkflow,
     parse_paragraph_reply,
@@ -67,6 +73,7 @@ class AdapterModel(ChatGPTAPI):
 
     def _protected_completion(self, messages, stage):
         self.sends.append(messages)
+        self._protected_last_request = {"stage": "translation"}
         entry = self.responses.pop(0)
         if isinstance(entry, BaseException):
             self._protected_last_response = (
@@ -1181,6 +1188,344 @@ def test_window_repair_sends_exact_counts_without_rejected_marker_text(tmp_path,
     assert "extra_or_duplicated" in output
 
 
+def test_window_excess_repair_keeps_an_unmarked_alias_as_plain_prose(tmp_path):
+    rejected = "DUPLICATE_MARKER_RESPONSE_SENTINEL"
+    model = AdapterModel(
+        [
+            (
+                '<bbm-response><bbm-unit id="a">'
+                f'${{佐天泪子}} arrived; ${{佐天泪子}} {rejected}.'
+                "</bbm-unit></bbm-response>",
+                "stop",
+            ),
+            (
+                '<bbm-response><bbm-unit id="a">'
+                "${佐天泪子} arrived; her classmate Saten waved."
+                "</bbm-unit></bbm-response>",
+                "stop",
+            ),
+        ]
+    )
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"window excess alias repair")
+    workflow = MarkerWorkflow(
+        model,
+        str(source),
+        settings={"workflow": WINDOW_WORKFLOW},
+    )
+
+    result = workflow.translate(
+        ["${佐天泪子}到了，佐天同学看了过来。"],
+        model.translate_marker_units,
+        lambda *_: None,
+        identities=["a"],
+        premarked=True,
+    )
+
+    assert result == ["${佐天泪子} arrived; her classmate Saten waved."]
+    assert len(model.sends) == 2
+    repair = model.sends[1][-1]["content"]
+    assert '"expected_marker_counts":{"佐天泪子":1}' in repair
+    assert '"retry_instructions"' in repair
+    assert "not to the person globally" in repair
+    assert "佐天同学" in repair
+    assert "These fragments must remain unmarked" in repair
+    assert "ordinary prose" in repair
+    assert rejected not in repair
+
+
+class MappingAdapter(AdapterModel):
+    def __init__(self, responses, max_attempts=5, target="Saten"):
+        super().__init__(responses, max_attempts=max_attempts)
+        self.mapping_requests = []
+        self.target = target
+
+    def marker_mapping_request(self, prompt):
+        self.mapping_requests.append(prompt)
+        entries = json.loads(prompt.rsplit("\n", 1)[-1])
+        raw = json.dumps(
+            {
+                "mappings": [
+                    {
+                        "key": entry["key"],
+                        "label": entry["label"],
+                        "target": self.target,
+                    }
+                    for entry in entries
+                ]
+            },
+            ensure_ascii=False,
+        )
+        self._protected_last_request = {"stage": "display-mapping"}
+        self._protected_last_response = raw
+        self._protected_response_metadata = {"stage": "display-mapping"}
+        return raw
+
+
+def _seed_pending_mapping(workflow, label, target=None):
+    workflow.catalogue[label] = {
+        "key": marker_key(label),
+        "target": target,
+        "mapping_status": "mapped" if target else "pending",
+        "count": 0,
+        "paragraphs": [],
+        "occurrences": [],
+        "contexts": [],
+        "references": [],
+    }
+
+
+def test_repeated_excess_marker_uses_validated_target_as_plain_text(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${佐天泪子} arrived; ${佐天泪子} looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    model = MappingAdapter([(duplicate, "stop")] * 5)
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"excess marker fallback")
+    workflow = MarkerWorkflow(
+        model,
+        str(source_path),
+        settings={"workflow": WINDOW_WORKFLOW},
+    )
+    _seed_pending_mapping(workflow, "佐天泪子")
+
+    result = workflow.translate(
+        ["${佐天泪子}到了，佐天同学看了过来。"],
+        model.translate_marker_units,
+        lambda *_: None,
+        identities=["a"],
+        premarked=True,
+    )
+
+    assert result == ["${佐天泪子} arrived; Saten looked over."]
+    assert len(model.sends) == 5
+    assert len(model.mapping_requests) == 1
+    assert workflow.catalogue["佐天泪子"]["target"] == "Saten"
+    assert workflow.catalogue["佐天泪子"]["mapping_status"] == "mapped"
+    assert workflow.catalogue["佐天泪子"]["count"] == 1
+    assert model._protected_last_request == {"stage": "translation"}
+    assert model._protected_last_response == duplicate
+    assert model._protected_response_metadata == {
+        "finish_reason": "stop",
+        "model": "fake",
+    }
+
+
+def test_repeated_excess_prefers_remaining_translation_retries(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${佐天泪子} arrived; ${佐天泪子} looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    corrected = (
+        '<bbm-response><bbm-unit id="a">'
+        "${佐天泪子} arrived; Saten looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    model = MappingAdapter([(duplicate, "stop"), (corrected, "stop")])
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"retry before fallback")
+    workflow = MarkerWorkflow(
+        model,
+        str(source_path),
+        settings={"workflow": WINDOW_WORKFLOW},
+    )
+    _seed_pending_mapping(workflow, "佐天泪子")
+
+    result = workflow.translate(
+        ["${佐天泪子}到了，佐天同学看了过来。"],
+        model.translate_marker_units,
+        lambda *_: None,
+        identities=["a"],
+        premarked=True,
+    )
+
+    assert result == ["${佐天泪子} arrived; Saten looked over."]
+    assert len(model.sends) == 2
+    assert model.mapping_requests == []
+    assert workflow.catalogue["佐天泪子"]["target"] is None
+
+
+def test_excess_fallback_uses_existing_mapped_target_without_request(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${佐天泪子} arrived; ${佐天泪子} looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    model = MappingAdapter([(duplicate, "stop")] * 3, max_attempts=3)
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"existing display target")
+    workflow = MarkerWorkflow(
+        model,
+        str(source_path),
+        settings={"workflow": WINDOW_WORKFLOW},
+    )
+    _seed_pending_mapping(workflow, "佐天泪子", target="Saten")
+
+    result = workflow.translate(
+        ["${佐天泪子}到了，佐天同学看了过来。"],
+        model.translate_marker_units,
+        lambda *_: None,
+        identities=["a"],
+        premarked=True,
+    )
+
+    assert result == ["${佐天泪子} arrived; Saten looked over."]
+    assert len(model.sends) == 3
+    assert model.mapping_requests == []
+
+
+@pytest.mark.parametrize("bad_target", ["...", "佐天"])
+def test_excess_fallback_rejects_unusable_display_targets(tmp_path, bad_target):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${佐天泪子} arrived; ${佐天泪子} looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    model = MappingAdapter(
+        [(duplicate, "stop")] * 3,
+        max_attempts=3,
+        target=bad_target,
+    )
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"invalid display target")
+    workflow = MarkerWorkflow(
+        model,
+        str(source_path),
+        settings={"workflow": WINDOW_WORKFLOW},
+    )
+    _seed_pending_mapping(workflow, "佐天泪子")
+
+    with pytest.raises(MarkerValidationError):
+        workflow.translate(
+            ["${佐天泪子}到了，佐天同学看了过来。"],
+            model.translate_marker_units,
+            lambda *_: None,
+            identities=["a"],
+            premarked=True,
+        )
+
+    assert len(model.sends) == 3
+    assert len(model.mapping_requests) == 3
+    assert workflow.catalogue["佐天泪子"]["target"] is None
+    assert workflow.catalogue["佐天泪子"]["mapping_status"] == "pending"
+
+
+def test_excess_marker_fallback_rejects_missing_counts_and_unknown_labels(tmp_path):
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"unsafe excess marker fallback")
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${美琴} smiled at ${美琴}."
+        "</bbm-unit></bbm-response>"
+    )
+    model = MappingAdapter(
+        [(duplicate, "stop"), (duplicate, "stop")], max_attempts=2
+    )
+    workflow = MarkerWorkflow(
+        model,
+        str(source_path),
+        settings={"workflow": WINDOW_WORKFLOW},
+    )
+    _seed_pending_mapping(workflow, "美琴")
+
+    with pytest.raises(MarkerValidationError, match="missing="):
+        workflow.translate(
+            ["${美琴}对${一色}笑了。"],
+            model.translate_marker_units,
+            lambda *_: None,
+            identities=["a"],
+            premarked=True,
+        )
+
+    assert model.mapping_requests == []
+    assert workflow.recovery_master("a") is None
+    assert workflow.catalogue["美琴"]["target"] is None
+
+
+def test_window_zero_count_extra_marker_is_explicitly_removed(tmp_path):
+    model = AdapterModel(
+        [
+            (
+                '<bbm-response><bbm-unit id="a">'
+                "${佐天泪子} looked over."
+                "</bbm-unit></bbm-response>",
+                "stop",
+            ),
+            (
+                '<bbm-response><bbm-unit id="a">'
+                "Her classmate looked over."
+                "</bbm-unit></bbm-response>",
+                "stop",
+            ),
+        ]
+    )
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"window zero count repair")
+    workflow = MarkerWorkflow(
+        model,
+        str(source),
+        settings={"workflow": WINDOW_WORKFLOW},
+    )
+
+    result = workflow.translate(
+        ["佐天同学看了过来。"],
+        model.translate_marker_units,
+        lambda *_: None,
+        identities=["a"],
+        premarked=True,
+    )
+
+    assert result == ["Her classmate looked over."]
+    repair = model.sends[1][-1]["content"]
+    assert '"expected_marker_counts":{}' in repair
+    assert "source supplies zero markers" in repair
+    assert "${佐天泪子}" not in repair
+    assert "佐天同学" in repair
+    assert "These fragments must remain unmarked" in repair
+
+
+def test_window_mixed_missing_and_excess_markers_get_separate_guidance(tmp_path):
+    model = AdapterModel(
+        [
+            (
+                '<bbm-response><bbm-unit id="a">'
+                "${美琴} smiled at ${美琴}."
+                "</bbm-unit></bbm-response>",
+                "stop",
+            ),
+            (
+                '<bbm-response><bbm-unit id="a">'
+                "${美琴} smiled at ${一色}."
+                "</bbm-unit></bbm-response>",
+                "stop",
+            ),
+        ]
+    )
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"window mixed marker repair")
+    workflow = MarkerWorkflow(
+        model,
+        str(source),
+        settings={"workflow": WINDOW_WORKFLOW},
+    )
+
+    result = workflow.translate(
+        ["${美琴}对${一色}笑了。"],
+        model.translate_marker_units,
+        lambda *_: None,
+        identities=["a"],
+        premarked=True,
+    )
+
+    assert result == ["${美琴} smiled at ${一色}."]
+    repair = model.sends[1][-1]["content"]
+    assert "include every one at its corresponding marked source span" in repair
+    assert "not to the person globally" in repair
+
+
 def test_window_exhaustion_exposes_marker_reason_and_preserves_accepted_sibling(tmp_path):
     model = AdapterModel([
         ('<bbm-response><bbm-unit id="a">${美琴} smiled.</bbm-unit>'
@@ -1629,3 +1974,395 @@ def test_window_repair_feedback_uses_aliases_only():
     assert '"id":"u001"' in feedback
     assert '"id":"u002"' in feedback
     assert "epub:11:chap_11.xhtml" not in feedback
+
+class BrokenMappingAdapter(MappingAdapter):
+    def marker_mapping_request(self, prompt):
+        self.mapping_requests.append(prompt)
+        self._protected_last_request = {"stage": "display-mapping"}
+        self._protected_last_response = "not json"
+        self._protected_response_metadata = {"stage": "display-mapping"}
+        return "not json"
+
+
+class RefusingMappingAdapter(MappingAdapter):
+    def marker_mapping_request(self, prompt):
+        self.mapping_requests.append(prompt)
+        raise ProviderRefusal("policy")
+
+
+def test_excess_fallback_mapping_failure_is_transactional(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${????} arrived; ${????} looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    model = BrokenMappingAdapter([(duplicate, "stop")] * 3, max_attempts=3)
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"transactional mapping failure")
+    workflow = MarkerWorkflow(
+        model, str(source_path), settings={"workflow": WINDOW_WORKFLOW}
+    )
+    _seed_pending_mapping(workflow, "????")
+
+    with pytest.raises(MarkerValidationError, match="exhausted after 3"):
+        workflow.translate(
+            ["${????}??,?????????"],
+            model.translate_marker_units,
+            lambda *_: None,
+            identities=["a"],
+            premarked=True,
+        )
+
+    assert len(model.sends) == 3
+    assert len(model.mapping_requests) == 3
+    assert workflow.catalogue["????"]["target"] is None
+    assert workflow.catalogue["????"]["mapping_status"] == "pending"
+    assert workflow.catalogue["????"]["count"] == 0
+    assert workflow.state["mapping"]["failures"] == {}
+    assert workflow.recovery_master("a") is None
+    assert any(
+        row.get("stage") == "display-mapping"
+        for row in workflow.state["diagnostics"]["failures"]
+    )
+    assert model._protected_last_request == {"stage": "translation"}
+    assert model._protected_last_response == duplicate
+
+
+def test_excess_fallback_normalization_failure_restores_prior_catalogue(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${????} arrived; ${????} looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    model = MappingAdapter([(duplicate, "stop")] * 3, max_attempts=3)
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"normalized validation failure")
+    workflow = MarkerWorkflow(
+        model, str(source_path), settings={"workflow": WINDOW_WORKFLOW}
+    )
+    _seed_pending_mapping(workflow, "????")
+
+    def reject_normalized(_sources, translations):
+        if any("Saten" in text for text in translations):
+            raise MarkerValidationError("normalized quality rejected")
+
+    with pytest.raises(MarkerValidationError, match="exhausted after 3"):
+        workflow.translate(
+            ["${????}??,?????????"],
+            model.translate_marker_units,
+            reject_normalized,
+            identities=["a"],
+            premarked=True,
+        )
+
+    assert len(model.sends) == 3
+    assert len(model.mapping_requests) == 1
+    assert workflow.catalogue["????"]["target"] is None
+    assert workflow.catalogue["????"]["mapping_status"] == "pending"
+    assert workflow.catalogue["????"]["count"] == 0
+    assert workflow.state["mapping"]["failures"] == {}
+    assert workflow.recovery_master("a") is None
+    assert model._protected_last_request == {"stage": "translation"}
+    assert model._protected_last_response == duplicate
+
+
+def test_excess_fallback_mapping_provider_refusal_is_terminal(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${????} arrived; ${????} looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    model = RefusingMappingAdapter([(duplicate, "stop")] * 3, max_attempts=3)
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"mapping provider refusal")
+    workflow = MarkerWorkflow(
+        model, str(source_path), settings={"workflow": WINDOW_WORKFLOW}
+    )
+    _seed_pending_mapping(workflow, "????")
+
+    with pytest.raises(ProviderRefusal):
+        workflow.translate(
+            ["${????}??,?????????"],
+            model.translate_marker_units,
+            lambda *_: None,
+            identities=["a"],
+            premarked=True,
+        )
+
+    assert len(model.sends) == 3
+    assert len(model.mapping_requests) == 1
+    assert workflow.catalogue["????"]["target"] is None
+    assert workflow.catalogue["????"]["mapping_status"] == "pending"
+    assert workflow.catalogue["????"]["count"] == 0
+    assert workflow.state["mapping"]["failures"] == {}
+    assert workflow.recovery_master("a") is None
+    assert any(
+        row.get("stage") == "display-mapping"
+        for row in workflow.state["diagnostics"]["failures"]
+    )
+
+
+def test_excess_fallback_refusal_commits_valid_siblings_before_stopping(tmp_path):
+    excess = "${????}??,${????}????????"
+
+    def response(first, second):
+        return (
+            '<bbm-response><bbm-unit id="a">'
+            f"{first}</bbm-unit><bbm-unit id=\"b\">"
+            f"{second}</bbm-unit></bbm-response>"
+        )
+
+    model = RefusingMappingAdapter(
+        [
+            (response("Alice arrived.", excess), "stop"),
+            (response("Alice arrived.", excess), "stop"),
+            (response("${Alice} arrived.", excess), "stop"),
+        ],
+        max_attempts=3,
+    )
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"mapping refusal preserves valid siblings")
+    workflow = MarkerWorkflow(
+        model, str(source_path), settings={"workflow": WINDOW_WORKFLOW}
+    )
+    _seed_pending_mapping(workflow, "????")
+    persisted = []
+
+    def persist():
+        persisted.append(
+            [
+                (entry["identity"], entry["master"])
+                for entry in workflow.recovery_entries()
+            ]
+        )
+
+    with pytest.raises(ProviderRefusal):
+        workflow.translate(
+            ["${Alice} arrived.", "${????}??,?????????"],
+            model.translate_marker_units,
+            lambda *_: None,
+            identities=["a", "b"],
+            premarked=True,
+            persist=persist,
+        )
+
+    assert len(model.sends) == 3
+    assert len(model.mapping_requests) == 1
+    assert persisted == [[("a", "${Alice} arrived.")]]
+    assert workflow.recovery_master("a") == "${Alice} arrived."
+    assert workflow.recovery_master("b") is None
+    assert workflow.catalogue["Alice"]["count"] == 1
+    assert workflow.catalogue["????"]["target"] is None
+    assert workflow.catalogue["????"]["count"] == 0
+    failures = workflow.state["diagnostics"]["failures"]
+    assert any(row.get("stage") == "display-mapping" for row in failures)
+    assert any(row.get("stage") == "provider-refusal" for row in failures)
+
+
+def test_excess_fallback_context_repair_commits_and_persists_valid_siblings(tmp_path):
+    excess = "${????}??,${????}????????"
+
+    def response(first, second):
+        return (
+            '<bbm-response><bbm-unit id="a">'
+            f"{first}</bbm-unit><bbm-unit id=\"b\">"
+            f"{second}</bbm-unit></bbm-response>"
+        )
+
+    model = MappingAdapter(
+        [
+            (response("Alice arrived.", excess), "stop"),
+            (response("Alice arrived.", excess), "stop"),
+            (response("${Alice} arrived.", excess), "stop"),
+        ],
+        max_attempts=3,
+    )
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"context repair preserves valid siblings")
+    workflow = MarkerWorkflow(
+        model, str(source_path), settings={"workflow": WINDOW_WORKFLOW}
+    )
+    _seed_pending_mapping(workflow, "????")
+    context_checks = 0
+
+    def context_repair_during_fallback():
+        nonlocal context_checks
+        context_checks += 1
+        if context_checks == 2:
+            workflow.mark_context_repair(
+                "test context invalidated before targeted fallback mapping",
+                purpose="test",
+            )
+        return workflow.context_repair_record().get("pending", False)
+
+    workflow.context_repair_pending = context_repair_during_fallback
+    persisted = []
+
+    def persist():
+        persisted.append(
+            [
+                (entry["identity"], entry["master"])
+                for entry in workflow.recovery_entries()
+            ]
+        )
+
+    with pytest.raises(ContextRepairPending):
+        workflow.translate(
+            ["${Alice} arrived.", "${????}??,?????????"],
+            model.translate_marker_units,
+            lambda *_: None,
+            identities=["a", "b"],
+            premarked=True,
+            persist=persist,
+        )
+
+    assert len(model.sends) == 3
+    assert model.mapping_requests == []
+    assert persisted == [[("a", "${Alice} arrived.")]]
+    assert workflow.recovery_master("a") == "${Alice} arrived."
+    assert workflow.recovery_master("b") is None
+    assert workflow.state["session"]["context_repair"]["pending"] is True
+    assert workflow.catalogue["Alice"]["count"] == 1
+    assert workflow.catalogue["????"]["count"] == 0
+    assert any(
+        row.get("stage") == "context-repair-pending"
+        for row in workflow.state["diagnostics"]["failures"]
+    )
+
+
+def test_excess_fallback_handles_multiple_labels_atomically(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${食蜂操祈} and ${食蜂操祈} met ${一色} and ${一色}."
+        "</bbm-unit></bbm-response>"
+    )
+    model = MappingAdapter([(duplicate, "stop")] * 2, max_attempts=2)
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"multiple label excess fallback")
+    workflow = MarkerWorkflow(
+        model, str(source_path), settings={"workflow": WINDOW_WORKFLOW}
+    )
+    _seed_pending_mapping(workflow, "食蜂操祈")
+    _seed_pending_mapping(workflow, "一色")
+
+    result = workflow.translate(
+        ["${食蜂操祈}?${一色}"],
+        model.translate_marker_units,
+        lambda *_: None,
+        identities=["a"],
+        premarked=True,
+    )
+
+    assert len(result) == 1
+    assert result[0].count("${食蜂操祈}") == 1
+    assert result[0].count("${一色}") == 1
+    assert result[0].count("Saten") == 2
+    assert workflow.catalogue["食蜂操祈"]["target"] == "Saten"
+    assert workflow.catalogue["一色"]["target"] == "Saten"
+    assert workflow.catalogue["食蜂操祈"]["mapping_status"] == "mapped"
+    assert workflow.catalogue["一色"]["mapping_status"] == "mapped"
+
+class PartialBatchMappingAdapter(MappingAdapter):
+    def marker_mapping_request(self, prompt):
+        self.mapping_requests.append(prompt)
+        entries = json.loads(prompt.rsplit("\n", 1)[-1])
+        if any(entry["label"] == "一色" for entry in entries):
+            return "not json"
+        raw = json.dumps(
+            {
+                "mappings": [
+                    {
+                        "key": entry["key"],
+                        "label": entry["label"],
+                        "target": self.target,
+                    }
+                    for entry in entries
+                ]
+            },
+            ensure_ascii=False,
+        )
+        self._protected_last_request = {"stage": "display-mapping"}
+        self._protected_last_response = raw
+        self._protected_response_metadata = {"stage": "display-mapping"}
+        return raw
+
+
+def test_excess_fallback_partial_mapping_batches_are_transactional(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${食蜂操祈} and ${食蜂操祈} met ${一色} and ${一色}."
+        "</bbm-unit></bbm-response>"
+    )
+    model = PartialBatchMappingAdapter(
+        [(duplicate, "stop")] * 2, max_attempts=2
+    )
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"partial mapping batch failure")
+    workflow = MarkerWorkflow(
+        model,
+        str(source_path),
+        settings={
+            "workflow": WINDOW_WORKFLOW,
+            "request_max_units": 1,
+            "request_max_tokens": 8000,
+        },
+    )
+    _seed_pending_mapping(workflow, "食蜂操祈")
+    _seed_pending_mapping(workflow, "一色")
+
+    with pytest.raises(MarkerValidationError, match="exhausted after 2"):
+        workflow.translate(
+            ["${食蜂操祈}?${一色}"],
+            model.translate_marker_units,
+            lambda *_: None,
+            identities=["a"],
+            premarked=True,
+        )
+
+    assert len(model.sends) == 2
+    assert len(model.mapping_requests) == 3
+    assert workflow.catalogue["食蜂操祈"]["target"] is None
+    assert workflow.catalogue["一色"]["target"] is None
+    assert workflow.catalogue["食蜂操祈"]["mapping_status"] == "pending"
+    assert workflow.catalogue["一色"]["mapping_status"] == "pending"
+    assert workflow.catalogue["食蜂操祈"]["count"] == 0
+    assert workflow.catalogue["一色"]["count"] == 0
+    assert workflow.state["mapping"]["failures"] == {}
+    assert workflow.recovery_master("a") is None
+    assert any(
+        row.get("stage") == "display-mapping"
+        for row in workflow.state["diagnostics"]["failures"]
+    )
+    assert model._protected_last_request == {"stage": "translation"}
+    assert model._protected_last_response == duplicate
+
+
+def test_excess_fallback_unknown_target_language_fails_closed(tmp_path):
+    duplicate = (
+        '<bbm-response><bbm-unit id="a">'
+        "${????} arrived; ${????} looked over."
+        "</bbm-unit></bbm-response>"
+    )
+    model = MappingAdapter([(duplicate, "stop")] * 3, max_attempts=3)
+    source_path = tmp_path / "source.epub"
+    source_path.write_bytes(b"unknown target language")
+    workflow = MarkerWorkflow(
+        model, str(source_path), settings={"workflow": WINDOW_WORKFLOW}
+    )
+    workflow.model.language = None
+    _seed_pending_mapping(workflow, "????", target="Saten")
+
+    with pytest.raises(MarkerValidationError, match="exhausted after 3"):
+        workflow.translate(
+            ["${????}??,?????????"],
+            model.translate_marker_units,
+            lambda *_: None,
+            identities=["a"],
+            premarked=True,
+        )
+
+    assert len(model.mapping_requests) == 0
+    assert workflow.catalogue["????"]["target"] == "Saten"
+    assert workflow.catalogue["????"]["mapping_status"] == "mapped"
+    assert workflow.catalogue["????"]["count"] == 0
+    assert workflow.recovery_master("a") is None

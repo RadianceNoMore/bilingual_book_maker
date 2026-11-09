@@ -104,10 +104,17 @@ exit $LASTEXITCODE
     assert "--resume" in recorded["args"]
     assert "--translate-filename" in recorded["args"]
     assert "--protected-names" in recorded["args"]
-    assert "--glossary-window-tokens" in recorded["args"] and "8192" in recorded["args"]
+    # The window-first workflow renamed these flags long after this launcher
+    # test was written; assert what the launcher actually forwards today.
+    assert "--name-window-tokens" in recorded["args"] and "8192" in recorded["args"]
+    assert "--source-summary-tokens" in recorded["args"] and "1500" in recorded["args"]
     assert "25" in recorded["args"] and "2400" in recorded["args"]
     assert ("--whole-chapter" in recorded["args"]) == whole
     assert ("--accumulate-across-chapters" in recorded["args"]) != whole
+    # Capture mode runs the launcher offline: no gateway preflight, so the
+    # translator keeps the direct gemini-anon base and never the proxy port.
+    assert "http://127.0.0.1:4995/v1" in recorded["args"]
+    assert "http://127.0.0.1:4998/v1" not in recorded["args"]
 
 
 @pytest.mark.skipif(not POWERSHELL, reason="PowerShell is unavailable")

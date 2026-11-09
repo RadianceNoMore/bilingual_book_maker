@@ -153,6 +153,24 @@ def test_source_summary_prompt_lists_only_relevant_catalogue_labels():
     assert "must be written as ${label} at every mention" not in prompt
 
 
+def test_source_summary_prompt_can_require_preserving_prior_context():
+    from book_maker.source_windows import source_summary_prompt
+
+    unit = WindowUnit("unit-1", "job-1", "Alice met Carol.", 0, "chapter-1")
+    window = SourceWindow("w000002", (unit,), 5)
+    prompt = source_summary_prompt(
+        "Earlier, Alice arrived.",
+        window,
+        "English",
+        1500,
+        target_budget=1500,
+        minimum_budget=900,
+    )
+
+    assert "Use at least approximately 900 estimated tokens" in prompt
+    assert "within approximately 1500 estimated tokens" in prompt
+
+
 # --------------------------------------------------------- retry behaviour
 
 
@@ -226,6 +244,113 @@ def test_content_failure_still_receives_validation_feedback(tmp_path, monkeypatc
     assert len(model.requests) == 2
     assert "previous draft failed validation" in model.requests[1][0]
     assert "Summary is empty" in model.requests[1][0]
+    assert "within approximately 1500 estimated tokens" in model.requests[0][0]
+    assert "within approximately 1500 estimated tokens" in model.requests[1][0]
+
+
+def test_short_cumulative_summary_is_rejected_and_retried_for_coverage(
+    tmp_path, monkeypatch
+):
+    prior = "前文累计事件。"
+    short = "简短摘要。"
+    accepted = "保留前文关键事件，并加入当前窗口的重要发展。"
+    estimates = {prior: 1000, short: 500, accepted: 800}
+    monkeypatch.setattr(
+        "book_maker.utils.num_tokens_from_text",
+        lambda text: estimates.get(text, 1),
+    )
+    monkeypatch.setattr(
+        MarkerWorkflow,
+        "_backoff",
+        staticmethod(lambda attempts, stage="", *, base=1, cap=8: None),
+    )
+    model = SummaryModel([short, accepted])
+    workflow, window = _prepared_workflow(
+        tmp_path, model, "美琴离开了。", ["美琴"]
+    )
+    workflow.source_windows_state["current_summary"] = prior
+    workflow.prepared_window(window)["incoming_summary"] = prior
+
+    summary = workflow.summarize_source_window(window, budget=1500)
+
+    assert summary == accepted
+    assert len(model.requests) == 2
+    assert "at least approximately 700 estimated tokens" in model.requests[0][0]
+    assert "below the required minimum of 700" in model.requests[1][0]
+    assert workflow.source_summary == accepted
+
+
+def test_over_budget_summary_retry_lowers_prompt_target_but_keeps_hard_cap(
+    tmp_path, monkeypatch
+):
+    oversized = "第一次的累计摘要。"
+    accepted = "压缩后的原文摘要。"
+    estimates = {oversized: 1501, accepted: 1200}
+    monkeypatch.setattr(
+        "book_maker.utils.num_tokens_from_text",
+        lambda text: estimates.get(text, 1),
+    )
+    monkeypatch.setattr(
+        MarkerWorkflow,
+        "_backoff",
+        staticmethod(lambda attempts, stage="", *, base=1, cap=8: None),
+    )
+    model = SummaryModel([oversized, accepted])
+    workflow, window = _prepared_workflow(
+        tmp_path, model, "御坂美琴出现了。", ["御坂美琴"]
+    )
+
+    summary = workflow.summarize_source_window(window, budget=1500)
+
+    assert summary == accepted
+    assert [max_tokens for _prompt, max_tokens in model.requests] == [1500, 1500]
+    assert "within approximately 1500 estimated tokens" in model.requests[0][0]
+    assert "within approximately 1275 estimated tokens" in model.requests[1][0]
+    assert "previous draft measured 1501 estimated tokens" in model.requests[1][0]
+    assert "target no more than 1275 estimated tokens" in model.requests[1][0]
+    assert workflow.prepared_window(window)["status"] == "complete"
+
+
+def test_repeated_over_budget_summary_targets_decrease_and_keep_pending_state(
+    tmp_path, monkeypatch
+):
+    drafts = ["第一次累计摘要。", "第二次累计摘要。", "第三次累计摘要。"]
+    estimates = dict(zip(drafts, [1601, 1550, 1520]))
+    monkeypatch.setattr(
+        "book_maker.utils.num_tokens_from_text",
+        lambda text: estimates.get(text, 1),
+    )
+    monkeypatch.setattr(
+        MarkerWorkflow,
+        "_backoff",
+        staticmethod(lambda attempts, stage="", *, base=1, cap=8: None),
+    )
+    model = SummaryModel(drafts)
+    model.max_chunk_attempts = 3
+    workflow, window = _prepared_workflow(
+        tmp_path, model, "御坂美琴出现了。", ["御坂美琴"]
+    )
+    prior = "前文发生的关键事件。"
+    workflow.source_windows_state["current_summary"] = prior
+    workflow.prepared_window(window)["incoming_summary"] = prior
+
+    with pytest.raises(MarkerValidationError, match="after 3 attempts"):
+        workflow.summarize_source_window(window, budget=1500)
+
+    assert [max_tokens for _prompt, max_tokens in model.requests] == [1500] * 3
+    assert [
+        next(
+            int(part.split(" estimated tokens")[0])
+            for part in prompt.split("within approximately ")[1:]
+        )
+        for prompt, _max_tokens in model.requests
+    ] == [1500, 1275, 1083]
+    record = workflow.prepared_window(window)
+    assert record["status"] == "summary_pending"
+    assert record["incoming_summary"] == prior
+    assert set(record["accepted_unit_ids"]) == {"unit-1"}
+    assert workflow.source_windows_state["current_summary"] == prior
+    assert workflow.source_windows_state["summary_pending_window"] == window.identity
 
 
 def test_terminal_refusal_stops_without_a_second_request(tmp_path):

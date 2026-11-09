@@ -1,0 +1,44 @@
+{
+  "unit_id": "epub:5:chap_5.xhtml:77:0f1f266cfb3e8c2d",
+  "provider": "local gateway http://127.0.0.1:4995/v1",
+  "model": "gemini-anon",
+  "response_characters": 182,
+  "response_starts": "<bbm-response>\n<bbm-unit id=\"u003\">\"Don't apologize to me.\" ${御坂美琴} raised her hand and gently stroked ${一色}'s cheek. \"Today, ${一色} has finally come back.\"</bbm-unit>\n</bbm-response>",
+  "accepted": true,
+  "error": null,
+  "framing_error": null,
+  "unknown": [],
+  "metadata": {
+    "attempt_id": "paragraph-response-00001",
+    "stage": "paragraph-response",
+    "window_id": null,
+    "chunk": null,
+    "chunk_count": null,
+    "requested_units": 1,
+    "original_chunk_units": null,
+    "estimated_output_allowance": 1017,
+    "provider_calls": 1,
+    "elapsed_seconds": 21.662,
+    "finish_reason": "stop",
+    "model": "gemini-anon",
+    "refusal": null,
+    "usage": {
+      "prompt_tokens": 599,
+      "completion_tokens": 45,
+      "total_tokens": 645
+    },
+    "response_characters": 182,
+    "response_sha256": "37df913676def89c6814664fb8b76b467f9d1aa27149c96a10fcb2074dae545a",
+    "output_cap": {
+      "requested": null,
+      "accepted": null
+    },
+    "framing": {
+      "bbm_response_openings": 1,
+      "bbm_response_closings": 1,
+      "multiple_roots": false
+    },
+    "trace": "C:\\Users\\Tina_\\Documents\\PlayingWithRepo\\bilingual_book_maker-window-names\\diagnostics\\text198\\live-trace\\marker-trace.jsonl"
+  },
+  "trace_directory": "C:\\Users\\Tina_\\Documents\\PlayingWithRepo\\bilingual_book_maker-window-names\\diagnostics\\text198\\live-trace"
+}

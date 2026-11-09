@@ -5,6 +5,8 @@ from book_maker.marker_names import (
     markers,
     strip_markers,
     validate_batch,
+    validate_display_target,
+    validate_display_target_for_language,
     validate_summary,
 )
 from book_maker.marker_workflow import (
@@ -46,6 +48,27 @@ def test_rejects_reserved_source_syntax():
 
 def test_markers_preserve_exact_unicode():
     assert markers('Hello ${御坂美琴}!') == ['御坂美琴']
+
+
+def test_display_targets_need_text_and_must_not_copy_an_unsupported_source_script():
+    assert validate_display_target_for_language("佐天泪子", "Saten Ruiko", "English") == "Saten Ruiko"
+    assert validate_display_target_for_language("Alice", "Alice", "English") == "Alice"
+    with pytest.raises(MarkerError, match="letter or digit"):
+        validate_display_target("...")
+    with pytest.raises(MarkerError, match="source-script"):
+        validate_display_target_for_language("佐天泪子", "佐天", "English")
+
+
+def test_display_target_language_rejects_wrong_target_scripts_and_unknown_language():
+    with pytest.raises(MarkerError, match="target-script"):
+        validate_display_target_for_language("Alice", "爱丽丝", "English")
+    with pytest.raises(MarkerError, match="target-script"):
+        validate_display_target_for_language("佐天泪子", "Saten", "zh")
+    with pytest.raises(MarkerError, match="known target language"):
+        validate_display_target_for_language(
+            "Alice", "Alice", None, require_known_language=True
+        )
+    assert validate_display_target_for_language("Alice", "Alice", None) == "Alice"
 
 
 def test_known_short_label_cannot_consume_longer_source_label():

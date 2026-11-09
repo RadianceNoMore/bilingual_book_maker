@@ -4,6 +4,7 @@ import pytest
 
 from book_maker.loader.epub_loader import EPUBBookLoader
 from book_maker.loader.helper import translate_list_or_singles
+import book_maker.translation_quality as translation_quality
 from book_maker.translation_quality import (
     UntranslatedTextError,
     untranslated_reason,
@@ -17,6 +18,37 @@ from book_maker.translation_quality import (
 ])
 def test_real_book_source_echoes_are_rejected(source):
     assert untranslated_reason(source, source, "English")
+
+
+def test_repetitive_low_information_english_phrase_is_not_rejected(monkeypatch):
+    # langdetect can confidently mislabel a short phrase repeated many times.
+    class FakeLanguage:
+        lang = "ro"
+        prob = 0.99
+
+    monkeypatch.setattr(
+        translation_quality,
+        "_language_detector",
+        lambda: lambda text: [FakeLanguage()],
+    )
+    reply = "Golden Spatula " * 25
+
+    assert translation_quality._detected_language(reply) is None
+    assert untranslated_reason("金铲铲" * 25, reply, "English") is None
+
+
+def test_diverse_romanian_prose_targeting_english_is_still_rejected():
+    pytest.importorskip("langdetect")
+    romanian = (
+        "Aceasta este o poveste simplă despre un băiat care merge la școală "
+        "în fiecare dimineață. El își întâlnește prietenii și vorbește cu "
+        "profesorii despre temele sale."
+    )
+
+    reason = untranslated_reason("金铲铲" * 25, romanian, "English")
+
+    assert reason is not None
+    assert "ro" in reason
 
 
 def test_whitespace_changes_do_not_hide_a_source_echo():

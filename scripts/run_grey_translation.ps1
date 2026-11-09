@@ -10,6 +10,13 @@ directory, chooses the newest compatible partial recovery, and starts a fresh
 run when none exists. A completed book in output is never treated as a recovery.
 You may move an existing new-format partial EPUB into "ongoing" before resuming.
 
+With the default -VeniceFallbackLimit (nonzero) the run also starts a local
+refusal-fallback proxy (scripts/refusal_fallback_proxy.py) in front of the
+gemini gateway: the proxy forwards every request to gemini-anon and re-sends
+an individual chunk to the Venice guest bridge only when its Gemini reply is
+the standalone policy refusal, starting the Venice gateway on demand. -Resume
+still picks up where a refused run saved its progress.
+
 .PARAMETER Resume
 Resume the newest compatible partial recovery in "ongoing".
 
@@ -32,6 +39,35 @@ Maximum original-language source tokens inspected in one name-extraction request
 
 .PARAMETER SourceSummaryTokens
 Maximum estimated tokens in the cumulative original-language story summary (default 1500).
+
+.PARAMETER VeniceFallbackLimit
+Maximum Gemini policy refusals this workflow may reroute to the Venice guest
+bridge, counted in a rolling window (default 8 per 24 h; 0 disables the
+fallback and keeps every request on gemini-anon). Venice is expensive, so only
+a chunk whose Gemini reply is the standalone policy refusal ("I can help with
+many kinds of requests... policy-guidelines...", or the structured refusal /
+content-filter shapes this repository classifies the same way) is re-sent,
+through scripts/refusal_fallback_proxy.py, to Venice. Everything else passes
+through byte for byte. Refusals are logged to log/venice_fallback.log.
+
+.PARAMETER VenicePort
+Port of the Venice guest bridge (default 4996). When it is not running the
+proxy starts it from -VeniceDir; a port held by a process whose /health is not
+the Venice bridge is reported rather than trusted.
+
+.PARAMETER FallbackPort
+Port the refusal-fallback proxy listens on (default 4998). The translator's
+--api_base points here while the fallback is active; a proxy already running
+on the port is reused with its own settings.
+
+.PARAMETER VeniceDir
+Directory holding the Venice bridge's server.py (default
+C:\Users\Tina_\Documents\PlayingWithRepo\AI-BRIDGE\Venice), used only to
+launch it on demand; no AI-BRIDGE file is ever modified.
+
+.PARAMETER GatewayPython
+Python interpreter used to start the fallback proxy and, on demand, the
+Venice bridge (default "python").
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -51,17 +87,168 @@ param(
     [ValidateRange(1, 1000000)]
     [int]$NameWindowTokens = 8192,
     [ValidateRange(1, 1000000)]
-    [int]$SourceSummaryTokens = 1500
+    [int]$SourceSummaryTokens = 1500,
+    [ValidateRange(0, 10000)]
+    [int]$VeniceFallbackLimit = 8,
+    [ValidateRange(1024, 65535)]
+    [int]$VenicePort = 4996,
+    [ValidateRange(1024, 65535)]
+    [int]$FallbackPort = 4998,
+    [string]$VeniceDir = "C:\Users\Tina_\Documents\PlayingWithRepo\AI-BRIDGE\Venice",
+    [string]$GatewayPython = "python"
 )
 
 $ErrorActionPreference = 'Stop'
 $exitCode = 1
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
+# --- Venice refusal fallback (scripts/refusal_fallback_proxy.py) -------------
+#
+# gemini-anon stays the translator: with the fallback active the translator
+# points at the local proxy, which forwards to gemini-anon and re-sends the
+# rare standalone policy refusal to the Venice guest bridge, starting that
+# gateway on demand. No AI-BRIDGE file is touched; server.py is only launched.
+
+function Test-ServiceHealth {
+    param(
+        [Parameter(Mandatory)][string]$HealthUrl,
+        [Parameter(Mandatory)][string]$ServicePattern,
+        [switch]$RequireServing
+    )
+    try {
+        $health = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 5
+    }
+    catch {
+        return $false
+    }
+    if ($null -eq $health) {
+        return $false
+    }
+    if ("$($health.service)" -notmatch $ServicePattern) {
+        return $false
+    }
+    if ($RequireServing -and $health.ok -ne $true) {
+        return $false
+    }
+    return $true
+}
+
+function Wait-ServiceHealth {
+    param(
+        [Parameter(Mandatory)][string]$HealthUrl,
+        [Parameter(Mandatory)][string]$ServicePattern,
+        [int]$Seconds,
+        [switch]$RequireServing
+    )
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-ServiceHealth -HealthUrl $HealthUrl -ServicePattern $ServicePattern -RequireServing:$RequireServing) {
+            return $true
+        }
+        Start-Sleep -Seconds 2
+    }
+    return (Test-ServiceHealth -HealthUrl $HealthUrl -ServicePattern $ServicePattern -RequireServing:$RequireServing)
+}
+
+function Start-VeniceFallbackGateway {
+    # Serves when it can; every outcome the run can survive is survived with a
+    # spoken warning, because a missing rescue must never stop the book.
+    $healthUrl = "http://127.0.0.1:$VenicePort/health"
+    if (Test-ServiceHealth -HealthUrl $healthUrl -ServicePattern 'venice' -RequireServing) {
+        Write-Host "Venice gateway: already serving on port $VenicePort (reusing it)."
+        return $true
+    }
+    if (Test-ServiceHealth -HealthUrl $healthUrl -ServicePattern 'venice') {
+        [Console]::Error.WriteLine("Venice fallback: the gateway on port $VenicePort answers as Venice but not ok=true yet (its egress pool is still recovering); refusals may pass through until it recovers, and the proxy retries it per refusal.")
+        return $true
+    }
+    $squatting = Get-NetTCPConnection -LocalPort $VenicePort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -ne $squatting) {
+        [Console]::Error.WriteLine("Venice fallback: port $VenicePort is held by PID $($squatting.OwningProcess) but its /health is not the Venice bridge; stop that process or pass a different -VenicePort. Refusals will pass through unrescued.")
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $VeniceDir 'server.py'))) {
+        [Console]::Error.WriteLine("Venice fallback: no server.py in $VeniceDir; point -VeniceDir at the AI-BRIDGE\Venice checkout. Refusals will pass through unrescued.")
+        return $false
+    }
+    Write-Host "Venice gateway: not running; starting it from $VeniceDir (port $VenicePort)..."
+    Start-Process -FilePath $GatewayPython -ArgumentList @('-X', 'utf8', 'server.py', '--port', "$VenicePort") -WorkingDirectory $VeniceDir -WindowStyle Hidden | Out-Null
+    if (Wait-ServiceHealth -HealthUrl $healthUrl -ServicePattern 'venice' -Seconds 90 -RequireServing) {
+        Write-Host "Venice gateway: serving on port $VenicePort."
+        return $true
+    }
+    [Console]::Error.WriteLine("Venice fallback: the gateway did not report ok=true within 90s (egress discovery takes a while on a cold pool). The proxy retries it whenever a refusal arrives; until then refusals pass through unrescued.")
+    return $false
+}
+
+function Start-RefusalFallbackProxy {
+    $healthUrl = "http://127.0.0.1:$FallbackPort/health"
+    if (Test-ServiceHealth -HealthUrl $healthUrl -ServicePattern 'bbm-refusal-fallback-proxy') {
+        Write-Host "Refusal-fallback proxy: already running on port $FallbackPort (reusing its own settings; stop that process to apply changed ports or budgets)."
+        return $true
+    }
+    $squatting = Get-NetTCPConnection -LocalPort $FallbackPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -ne $squatting) {
+        [Console]::Error.WriteLine("Refusal-fallback proxy: port $FallbackPort is held by PID $($squatting.OwningProcess) and is not the fallback proxy; pass a different -FallbackPort. Refusals will pass through unrescued.")
+        return $false
+    }
+    $proxyPath = Join-Path $PSScriptRoot 'refusal_fallback_proxy.py'
+    if (-not (Test-Path -LiteralPath $proxyPath)) {
+        [Console]::Error.WriteLine("Refusal-fallback proxy: $proxyPath is missing; run without the fallback or restore the file.")
+        return $false
+    }
+    Write-Host "Refusal-fallback proxy: starting on port $FallbackPort (forwards to gemini-anon on 4995, rescues refused chunks with Venice on $VenicePort)..."
+    $argLine = @(
+        '-X utf8',
+        ('"' + $proxyPath + '"'),
+        ('--listen-port ' + $FallbackPort),
+        '--gemini-url http://127.0.0.1:4995/v1',
+        ('--venice-url http://127.0.0.1:' + $VenicePort + '/v1'),
+        ('--venice-dir "' + $VeniceDir + '"'),
+        ('--venice-python "' + $GatewayPython + '"'),
+        ('--venice-limit ' + $VeniceFallbackLimit),
+        ('--log-file "' + $veniceFallbackLog + '"')
+    ) -join ' '
+    Start-Process -FilePath $GatewayPython -ArgumentList $argLine -WorkingDirectory $repoRoot -WindowStyle Hidden | Out-Null
+    if (Wait-ServiceHealth -HealthUrl $healthUrl -ServicePattern 'bbm-refusal-fallback-proxy' -Seconds 30) {
+        Write-Host "Refusal-fallback proxy: running; decisions are logged to $veniceFallbackLog."
+        return $true
+    }
+    [Console]::Error.WriteLine("Refusal-fallback proxy: it did not report a healthy /health within 30s; see $veniceFallbackLog and the console above. Refusals will pass through unrescued (gemini-anon stays the translator).")
+    return $false
+}
+
+$veniceFallbackLog = Join-Path $repoRoot 'log\venice_fallback.log'
+$fallbackReady = $false
+# The args-capture harness (tests/test_repository_layout.py, $env:BBM_TEST_CAPTURE)
+# runs this launcher offline with python stubbed; starting real gateways there
+# would make the default test selection non-hermetic, so the preflight is
+# skipped exactly when capture mode is on and the run keeps the direct
+# gemini-anon base. Outside the harness the fallback is the default.
+$runningUnderCaptureHarness = -not [string]::IsNullOrWhiteSpace($env:BBM_TEST_CAPTURE)
+if ($VeniceFallbackLimit -gt 0 -and -not $runningUnderCaptureHarness) {
+    $null = Start-VeniceFallbackGateway
+    if (Start-RefusalFallbackProxy) {
+        $fallbackReady = $true
+    }
+}
+
+$activeApiBase = 'http://127.0.0.1:4995/v1'
+if ($fallbackReady) {
+    $activeApiBase = "http://127.0.0.1:$FallbackPort/v1"
+    Write-Host "Venice refusal fallback active: only the chunk whose Gemini reply is the standalone policy refusal is re-sent to the Venice bridge (limit $VeniceFallbackLimit per 24h); every other request - and every retryable provider error - stays on gemini-anon."
+}
+else {
+    if ($VeniceFallbackLimit -gt 0 -and -not $runningUnderCaptureHarness) {
+        [Console]::Error.WriteLine("Venice refusal fallback is OFF for this run: gemini-anon serves everything directly, exactly as before. A refusal stops the run with progress saved under ongoing; rerun with -Resume once the gateway situation is fixed.")
+    }
+    Write-Verbose "Venice refusal fallback disabled (VeniceFallbackLimit=$VeniceFallbackLimit; capture harness: $runningUnderCaptureHarness)."
+}
+
 $translationArgs = @(
     '--book_name', $bookPath,
     '--api_format', 'openai',
-    '--api_base', 'http://127.0.0.1:4995/v1',
+    '--api_base', $activeApiBase,
     '--key', 'anon',
     '--model', 'gemini-anon',
     '--language', 'en',

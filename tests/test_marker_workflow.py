@@ -223,7 +223,7 @@ class SendModel(Model):
                     {
                         "key": row["key"],
                         "label": row["label"],
-                        "target": f"Target {row['label']}",
+                        "target": f"Target {row['key'][:8]}",
                     }
                     for row in payload
                 ]
@@ -886,6 +886,18 @@ def test_non_english_targets_keep_generic_rules_without_english_example(tmp_path
     assert content.count("MARKER RULES:") == 2
 
 
+def test_premarked_instructions_preserve_repeated_marker_occurrences():
+    from book_maker.marker_workflow import marker_prompt, marker_rules
+
+    for instructions in (
+        marker_prompt(premarked=True),
+        marker_rules("english", premarked=True),
+    ):
+        assert "Preserve the exact count of each" in instructions
+        assert "copy every occurrence at its corresponding marked source span" in instructions
+        assert "do not collapse repeated names into pronouns or omit them" in instructions
+
+
 def test_repair_feedback_carries_targeted_corrections_for_right_paragraphs(
     tmp_path,
 ):
@@ -956,6 +968,27 @@ def test_repair_feedback_carries_targeted_corrections_for_right_paragraphs(
     assert workflow.catalogue["美琴"]["count"] == 2
     assert "小明" not in workflow.catalogue
     assert len(workflow.model.session.messages()) == 2  # one accepted round
+
+
+def test_excess_marker_feedback_preserves_unmarked_aliases_as_plain_prose():
+    from book_maker.marker_workflow import _failure_corrections
+
+    corrections = _failure_corrections(
+        [
+            {
+                "kind": "excess",
+                "label": "佐天泪子",
+                "available": 1,
+                "requested": 2,
+            }
+        ]
+    )
+
+    assert len(corrections) == 1
+    assert "keep no more than 1 marked occurrence(s)" in corrections[0]
+    assert "unmarked alias, nickname, or honorific" in corrections[0]
+    assert "plain prose" in corrections[0]
+    assert "do not replace it with this full-name marker" in corrections[0]
 
 
 def test_pending_repair_blocks_translation_and_display_mappings(tmp_path):
