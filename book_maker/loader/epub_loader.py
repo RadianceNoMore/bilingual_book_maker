@@ -4180,6 +4180,9 @@ class EPUBBookLoader(BaseBookLoader):
 
         source_values = {}
         for cache_key, source in unique_targets.items():
+            if source.strip().isdigit():
+                source_values[source] = source
+                continue
             cached = self._localized_cache.get(cache_key)
             if cached is None:
                 continue
@@ -4757,6 +4760,7 @@ class EPUBBookLoader(BaseBookLoader):
                     print(f"[bold red]Protected names: {detail}[/bold red]")
                     self._active_source_window_stage = None
                     self._save_progress()
+                    # Preserve the typed cause for checkpoint-aware supervision.
                     raise MarkerValidationError(detail) from error
                 finally:
                     self.translate_model._marker_diagnostic_context = (
@@ -4891,6 +4895,13 @@ class EPUBBookLoader(BaseBookLoader):
         return str(Path(source_name).with_name(stem))
 
     def _cached_localization(self, cache_key, source):
+        # Numeric navigation/title labels have no language to translate. Sending
+        # them through name extraction can invent catalogue entries for digits.
+        if source.strip().isdigit():
+            if self._localized_cache.get(cache_key) != source:
+                self._localized_cache[cache_key] = source
+                self._save_progress()
+            return source
         fresh = cache_key not in self._localized_cache
         if fresh:
             marker = getattr(
@@ -6516,19 +6527,35 @@ class EPUBBookLoader(BaseBookLoader):
                 traceback.print_exc()
 
             print("Saving progress...")
+            recovery_saved = False
             try:
                 self._save_progress()
             except Exception:
                 pass
             try:
                 self._save_temp_book()
+                recovery_saved = True
             except Exception:
                 try:
                     self._write_partial_recovery(
                         new_book, chapter_plans, title_records
                     )
+                    recovery_saved = True
                 except Exception:
                     pass
+            if marker_mode and recovery_saved:
+                from book_maker.supervisor import publish_recovery, RECOVERABLE_EXIT
+                try:
+                    resumable = publish_recovery(
+                        e, self._marker_recovery_path(),
+                        fatal=getattr(self.translate_model, "_fatal_error_detected", False),
+                    )
+                except Exception as status_error:
+                    print(f"Recovery could not be verified for automatic resume: {status_error}")
+                    resumable = False
+                if resumable:
+                    print("Recovery verified; the launcher may resume this retryable stage automatically.")
+                    sys.exit(RECOVERABLE_EXIT)
             sys.exit(1)
             # the run failed and there is no output book; exiting 0 would
             # tell every caller the opposite

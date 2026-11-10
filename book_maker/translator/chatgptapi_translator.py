@@ -321,6 +321,7 @@ def _echoed_id(value):
 # a gateway that accepts a request and never answers hold a run for half an
 # hour with nothing printed.
 REQUEST_LIMITS = {"timeout": 300.0, "max_retries": 1}
+SOURCE_SUMMARY_REQUEST_TIMEOUT = 480.0
 
 
 class ClassifierSession:
@@ -919,7 +920,22 @@ class ChatGPTAPI(Base):
                 cap_requested = dict(cap)
                 cap_accepted = None
             try:
-                completion = self.openai_client.chat.completions.create(**request)
+                request_client = self.openai_client
+                if stage == "source-window-summary":
+                    # MarkerWorkflow owns a bounded retry loop for this stage.
+                    # Gemini has taken over five minutes to finish a request;
+                    # give this stage enough time to receive that response,
+                    # while leaving retry ownership with MarkerWorkflow.
+                    print(
+                        "Protected names: cumulative-summary failures use the "
+                        f"workflow retry loop; SDK retries are disabled and "
+                        f"the request deadline is {SOURCE_SUMMARY_REQUEST_TIMEOUT:.0f}s."
+                    )
+                    request_client = self.openai_client.with_options(
+                        max_retries=0,
+                        timeout=SOURCE_SUMMARY_REQUEST_TIMEOUT,
+                    )
+                completion = request_client.chat.completions.create(**request)
             except BadRequestError:
                 if cap:
                     cap_accepted = False

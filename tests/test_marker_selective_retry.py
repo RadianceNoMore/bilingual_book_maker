@@ -1160,6 +1160,90 @@ def _adapter_ids(messages):
     return [node.get("id") for node in root]
 
 
+def test_window_protocol_failures_do_not_spend_content_repairs(tmp_path):
+    model = AdapterModel([
+        ("unfinished XML", "stop"),
+        ("unfinished XML", "stop"),
+        ("unfinished XML", "stop"),
+        ('<bbm-response><bbm-unit id="a">He smiled.</bbm-unit></bbm-response>', "stop"),
+        ('<bbm-response><bbm-unit id="a">${韦伯} `smiled`.</bbm-unit></bbm-response>', "stop"),
+        ('<bbm-response><bbm-unit id="a">${韦伯} smiled.</bbm-unit></bbm-response>', "stop"),
+    ])
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"separate retry budgets")
+    workflow = MarkerWorkflow(model, str(source), settings={"workflow": WINDOW_WORKFLOW})
+    result = workflow.translate(
+        ["${韦伯}笑了。"], model.translate_marker_units,
+        workflow.validate_quality, identities=["a"], premarked=True,
+    )
+    assert result == ["${韦伯} smiled."]
+    assert len(model.sends) == 6
+    repair = model.sends[-1][-1]["content"]
+    assert "Markdown backticks" in repair
+    assert "`smiled`" not in repair
+    assert "He smiled." not in repair
+
+
+def test_window_learns_smaller_requests_across_chunks(tmp_path):
+    model = Model()
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"adaptive chunk cap")
+    workflow = MarkerWorkflow(model, str(source), settings={"workflow": WINDOW_WORKFLOW})
+    calls = []
+
+    def send(payload, feedback="", **kwargs):
+        ids = _payload_ids(payload)
+        calls.append(ids)
+        if len(calls) == 1:
+            return "broken response"
+        return "<bbm-response>" + "".join(
+            f'<bbm-unit id="{identity}">He smiled.</bbm-unit>' for identity in ids
+        ) + "</bbm-response>"
+
+    for chunk in ("abcd", "efgh"):
+        assert workflow.translate(
+            ["他笑了。"] * 4, send, workflow.validate_quality,
+            identities=list(chunk), premarked=True,
+        ) == ["He smiled."] * 4
+    assert list(map(len, calls)) == [4, 2, 2, 2, 2]
+    assert workflow.source_windows_state["translation_policy"]["unit_cap"] == 2
+
+
+def test_window_protocol_retry_budget_still_stops_bounded(tmp_path):
+    model = AdapterModel([("bad XML", "stop")] * 3, max_attempts=3)
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"bounded protocol failures")
+    workflow = MarkerWorkflow(model, str(source), settings={"workflow": WINDOW_WORKFLOW})
+    with pytest.raises(MarkerValidationError, match="3/3 protocol failures"):
+        workflow.translate(
+            ["他笑了。"], model.translate_marker_units, workflow.validate_quality,
+            identities=["a"], premarked=True,
+        )
+    assert len(model.sends) == 3
+    assert workflow.recovery_entries() == []
+
+
+def test_window_request_cap_grows_after_sustained_protocol_success(tmp_path):
+    model = Model()
+    source = tmp_path / "source.epub"
+    source.write_bytes(b"recover throughput")
+    workflow = MarkerWorkflow(model, str(source), settings={"workflow": WINDOW_WORKFLOW})
+    workflow.source_windows_state["translation_policy"] = {"unit_cap": 2, "clean_streak": 0}
+
+    def send(payload, feedback="", **kwargs):
+        return "<bbm-response>" + "".join(
+            f'<bbm-unit id="{identity}">He smiled.</bbm-unit>'
+            for identity in _payload_ids(payload)
+        ) + "</bbm-response>"
+
+    for index in range(8):
+        workflow.translate(
+            ["他笑了。"], send, workflow.validate_quality,
+            identities=[str(index)], premarked=True,
+        )
+    assert workflow.source_windows_state["translation_policy"]["unit_cap"] == 4
+
+
 def test_window_repair_sends_exact_counts_without_rejected_marker_text(tmp_path, capsys):
     model = AdapterModel([
         ('<bbm-response><bbm-unit id="a">${美琴} smiled.</bbm-unit>'

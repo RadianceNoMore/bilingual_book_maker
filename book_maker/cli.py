@@ -2007,7 +2007,7 @@ off. Minimum 1.
     )
     parser.add_argument(
         "--source-summary-tokens", type=batch_unit_cap, default=1500,
-        help="protected-name mode: maximum estimated tokens in the cumulative original-language story summary (default: 1500)",
+        help="protected-name mode: maximum provider-reported summary output tokens when available; otherwise a local estimate (default: 1500)",
     )
     parser.add_argument(
         "--glossary-window-tokens", type=batch_unit_cap, default=None,

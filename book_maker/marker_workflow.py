@@ -68,9 +68,28 @@ SOURCE_SUMMARY_POLICY = "plain-labels-allowed-v1"
 RETRY_UNIT_CAPS = {2: 8, 3: 2}
 RETRY_UNIT_CAP_AFTER = 1
 
+# Keep this standalone person-outline kaomoji out of translation requests.
+# Translating its Han glyph 人 turns part of the face into ordinary prose,
+# while sending it unchanged can trigger the untranslated-script retry guard.
+_STANDALONE_KAOMOJI = re.compile(
+    r"(?:[／/][ \t]*人[◕∩][ \t]*‿‿[ \t]*[◕∩]人[＼\\])+"
+)
+
+
+def _is_standalone_kaomoji(text):
+    """Whether *text* is only the recognizable person-outline kaomoji form."""
+    if not isinstance(text, str):
+        return False
+    value = text.strip()
+    return len(value) <= 256 and bool(_STANDALONE_KAOMOJI.fullmatch(value))
+
 
 class MarkerValidationError(MarkerError, BatchMismatch):
     """A retryable marker/protocol failure; accepted state is untouched."""
+
+
+class RecoverableWorkflowError(MarkerValidationError):
+    """A bounded provider/validation stage exhausted; safe to resume its checkpoint."""
 
 
 class ContextRepairPending(MarkerValidationError):
@@ -141,6 +160,7 @@ class _PendingParagraph:
     source: str
     source_digest: str
     attempts: int = 0
+    protocol_failures: int = 0
     last_error: str = ""
     last_stage: str = ""
     last_category: str = ""
@@ -150,6 +170,10 @@ class _PendingParagraph:
     # absent or over-repeated); it only shapes repair feedback, never the
     # deterministic accept/reject decision.
     last_failure: list | None = None
+
+    @property
+    def rounds(self):
+        return self.attempts + self.protocol_failures
 
 
 @dataclass
@@ -253,12 +277,12 @@ def _source_digest(texts):
 
 
 _FAILURE_CATEGORIES = (
+    ("marker multiset", "marker-mismatch"),
     ("duplicate", "duplicate-id"),
     ("nested", "malformed-unit"),
     ("not well-formed", "malformed-xml"),
     ("incomplete", "incomplete-response"),
     ("ambiguous", "ambiguous-frame"),
-    ("marker multiset", "marker-mismatch"),
     ("missing from response", "missing-unit"),
 )
 
@@ -1048,8 +1072,18 @@ def _window_context_text(context):
     """Serialize read-only source context outside the requested unit frames."""
     if not context:
         return ""
-    summary = html.escape(context.get("summary") or "", quote=False)
-    prefix = html.escape(context.get("accepted_source_prefix") or "", quote=False)
+    def plain_context(value):
+        # Older saved summaries contain name placeholders (sometimes with an
+        # extra trailing dollar). They are context, never marker instructions.
+        # Keep the source names while removing this misleading example syntax;
+        # the actual requested units retain their exact protected markers.
+        return html.escape(
+            re.sub(r"\$\{([^{}$]+)\}\$?", r"\1", value or ""),
+            quote=False,
+        )
+
+    summary = plain_context(context.get("summary"))
+    prefix = plain_context(context.get("accepted_source_prefix"))
     parts = ["<bbm-window-context>"]
     if summary:
         parts.append(f"<prior-summary>{summary}</prior-summary>")
@@ -1071,12 +1105,32 @@ def assemble_marker_request(
     instruction. The reminder suffix sits outside the XML, and the parser
     still requires only a `bbm-response`.
     """
-    reminder = marker_rules(language, premarked=premarked)
-    parts = [marker_prompt(premarked=premarked), reminder]
+    # A marker-free prepared request needs ordinary translation, not repeated
+    # placeholder examples. Some providers imitate those examples even after
+    # explicit zero-count repairs. Acceptance still enforces the source counts.
+    plain_units = premarked and "${" not in payload
+    if plain_units:
+        reminder = (
+            "Translate all unmarked names, nicknames, and titles directly as "
+            "ordinary target-language prose. Do not introduce placeholders. "
+            "Return only valid XML with a bbm-response root and exactly one "
+            "bbm-unit for each requested id. Do not translate read-only context.\n"
+        )
+        parts = [
+            "Translate every requested source paragraph into the target "
+            "language, preserving its meaning, tone, and id. Escape XML "
+            "special characters in prose.\n\n",
+            reminder,
+        ]
+    else:
+        reminder = marker_rules(language, premarked=premarked)
+        parts = [marker_prompt(premarked=premarked), reminder]
     example = marker_example(language) if not premarked else ""
     if example:
         parts.append(example)
     if feedback:
+        if plain_units:
+            feedback = re.sub(r"\$\{([^{}$]+)\}\$?", r"\1", feedback)
         parts.append(marker_repair_notice(feedback))
     context_text = _window_context_text(context)
     if context_text:
@@ -1663,6 +1717,42 @@ class MarkerWorkflow:
         limit = getattr(self.model, "max_chunk_attempts", 5)
         if not isinstance(limit, int) or limit < 1:
             raise MarkerValidationError("max_chunk_attempts must be a positive integer")
+
+        # A standalone kaomoji is already the target-language content: it is
+        # visual punctuation, not prose. Commit this exact source locally so
+        # the provider cannot translate its Han-shaped face components. The
+        # matcher is deliberately narrow and only runs for prepared windows;
+        # prose and inline occurrences continue through normal validation.
+        literal_items = []
+        if premarked:
+            for item in items:
+                if (
+                    item.accepted is None
+                    and not markers(item.source)
+                    and _is_standalone_kaomoji(item.source)
+                ):
+                    item.delta = validate_paragraph(
+                        item.source, item.source, item.index
+                    )
+                    item.accepted = item.source
+                    literal_items.append(item)
+        if literal_items:
+            self._commit_round(literal_items, items, request_digest)
+            if persist is not None:
+                try:
+                    persist()
+                except Exception as error:
+                    self._record_failure("checkpoint-save", "", str(error))
+                    raise MarkerValidationError(
+                        "Standalone kaomoji was preserved locally, but its "
+                        "recovery checkpoint could not be written"
+                    ) from error
+            print(
+                "Protected names: preserved "
+                f"{len(literal_items)} standalone kaomoji unit(s) verbatim "
+                "without a provider request."
+            )
+
         session = getattr(self.model, "session", None)
         request_history = deepcopy(session.messages()) if session is not None else []
         chunk_token_budget = sum(_tokens(item.source) for item in items)
@@ -1679,7 +1769,7 @@ class MarkerWorkflow:
             outstanding = [item for item in items if item.accepted is None]
             if not outstanding:
                 break
-            eligible = [item for item in outstanding if item.attempts < limit]
+            eligible = [item for item in outstanding if item.attempts < limit and item.protocol_failures < limit]
             if not eligible:
                 self._exhaust_recovery(outstanding, limit, last_raw, stats=stats)
             transport_retry = transport_subset is not None
@@ -1700,6 +1790,9 @@ class MarkerWorkflow:
                 subset = self._next_retry_batch(
                     eligible, len(items), chunk_token_budget
                 )
+            if premarked:
+                policy = self.source_windows_state.setdefault("translation_policy", {})
+                subset = subset[:max(1, int(policy.get("unit_cap", len(items))))]
             for item in subset:
                 item.attempts += 1
             stats.record_send(len(subset))
@@ -1707,7 +1800,7 @@ class MarkerWorkflow:
             _ids, payload = paragraph_request(
                 [item.source for item in subset], request_ids
             )
-            attempt_number = max(item.attempts for item in subset)
+            attempt_number = max(item.rounds for item in subset)
             if attempt_number == 1:
                 feedback = ""
             else:
@@ -1722,9 +1815,9 @@ class MarkerWorkflow:
                 cap = retry_unit_cap(attempt_number, len(items))
                 if not transport_retry:
                     print(
-                        f"[yellow]Protected names: repair request attempt "
-                        f"{attempt_number}/{limit} carries {len(subset)} unit(s) "
-                        f"(cap {cap}); outstanding {len(outstanding)}.[/yellow]"
+                        f"[yellow]Protected names: repair round "
+                        f"{attempt_number} carries {len(subset)} unit(s) "
+                        f"(cap {cap}; each retry budget {limit}); outstanding {len(outstanding)}.[/yellow]"
                     )
             for item in subset:
                 item.last_error = ""
@@ -1907,6 +2000,23 @@ class MarkerWorkflow:
                     )
             else:
                 reply = parse_paragraph_reply(raw, request_ids)
+                if premarked and (reply.framing_error or reply.errors):
+                    # Learn from endpoint framing failures across chunks and
+                    # resumes; otherwise every new chunk repeats a failed large
+                    # request. Frozen chunk membership and aliases stay intact.
+                    policy = self.source_windows_state.setdefault("translation_policy", {})
+                    old_cap = max(2, int(policy.get("unit_cap", DEFAULT_MAPPING_UNITS)))
+                    policy["unit_cap"] = min(old_cap, 8, max(2, len(subset) // 2))
+                    policy["clean_streak"] = 0
+                    if policy["unit_cap"] < old_cap:
+                        print(f"Protected names: response framing reduced the persistent request cap from {old_cap} to {policy['unit_cap']} units.")
+                elif premarked:
+                    policy = self.source_windows_state.get("translation_policy") or {}
+                    if "unit_cap" in policy:
+                        policy["clean_streak"] = int(policy.get("clean_streak", 0)) + 1
+                        if policy["clean_streak"] >= 8:
+                            policy["unit_cap"] = min(DEFAULT_MAPPING_UNITS, policy["unit_cap"] * 2)
+                            policy["clean_streak"] = 0
                 if reply.framing_error:
                     response_meta = getattr(
                         self.model, "_protected_response_metadata", None
@@ -1959,7 +2069,12 @@ class MarkerWorkflow:
                             normalized = None
                             if (
                                 premarked
-                                and item.attempts >= limit
+                                and (
+                                    item.attempts >= limit
+                                    or self._is_unprotected_catalogue_marker_excess(
+                                        item, error
+                                    )
+                                )
                                 and terminal_fallback_error is None
                             ):
                                 try:
@@ -2055,6 +2170,18 @@ class MarkerWorkflow:
                         else:
                             item.last_error = error
                         failed.append(item)
+            if premarked:
+                for item in failed:
+                    if item.last_stage in ("response", "provider-error"):
+                        # No attributable translation was available to judge.
+                        # Charge the independent protocol budget, retaining the
+                        # full content-validation allowance. rounds still
+                        # shrinks requests and ensures repairs get feedback.
+                        item.attempts -= 1
+                        item.protocol_failures += 1
+                if failed:
+                    print("Protected names: retry budgets are separate: "
+                          f"content validation {limit}, response protocol {limit} per paragraph.")
             if accepted:
                 self._commit_round(accepted, items, request_digest)
                 if persist is not None:
@@ -2124,7 +2251,7 @@ class MarkerWorkflow:
                         "failures are recorded in the recovery diagnostics."
                     )
             done = len(items) - len(outstanding)
-            eligible = [item for item in outstanding if item.attempts < limit]
+            eligible = [item for item in outstanding if item.attempts < limit and item.protocol_failures < limit]
             if not eligible:
                 print(
                     f"[yellow]{done}/{len(items)} accepted; retry budget "
@@ -2249,7 +2376,7 @@ class MarkerWorkflow:
             f"{attempts_text}.[/yellow]"
         )
         self.retry_feedback = ""
-        raise MarkerValidationError(
+        raise RecoverableWorkflowError(
             "Marker transport circuit opened after "
             f"{trigger_text} at {endpoint}. Last exception chain: {chain}. "
             f"Pending ids: {', '.join(item.identity for item in pending)}. "
@@ -2269,12 +2396,12 @@ class MarkerWorkflow:
             return []
         # Prefer the least-retried group so an early stubborn unit cannot
         # starve paragraphs that have not yet had their own attempts.
-        pre_attempts = min(item.attempts for item in queue)
+        pre_attempts = min(item.rounds for item in queue)
         cap = retry_unit_cap(pre_attempts + 1, initial_cap)
         subset = []
         used = 0
         for item in queue:
-            if item.attempts != pre_attempts:
+            if item.rounds != pre_attempts:
                 continue
             if len(subset) >= cap:
                 break
@@ -2333,7 +2460,7 @@ class MarkerWorkflow:
     def _report_interrupted(self, outstanding, limit, stats, reason):
         """Terminal failures still have to explain which work never got a send."""
         pending = [item for item in outstanding if item.accepted is None]
-        eligible = [item for item in pending if item.attempts < limit]
+        eligible = [item for item in pending if item.attempts < limit and item.protocol_failures < limit]
         exhausted = len(pending) - len(eligible)
         print(
             "[bold red]Protected names: stopping because of a terminal "
@@ -2363,7 +2490,7 @@ class MarkerWorkflow:
     def _exhaust_recovery(self, outstanding, limit, raw, *, stats=None):
         details = "; ".join(
             f"{item.identity} (paragraph {item.index}, "
-            f"{item.attempts}/{limit} attempts, "
+            f"{item.attempts}/{limit} content attempts, {item.protocol_failures}/{limit} protocol failures, "
             f"{item.last_stage or 'unclassified'}): "
             f"{item.last_error or 'failed validation'}"
             for item in outstanding
@@ -2421,9 +2548,9 @@ class MarkerWorkflow:
             f"provider_calls={stats.provider_calls_text()}, "
             f"usage={stats.usage_text()}",
         )
-        raise MarkerValidationError(
-            f"Marker paragraph recovery exhausted after {limit} request(s) "
-            f"per paragraph. Outstanding ids: "
+        raise RecoverableWorkflowError(
+            f"Marker paragraph recovery exhausted after {limit} failures in one retry budget (limit {limit} content "
+            f"attempts and {limit} protocol failures per paragraph). Outstanding ids: "
             f"{', '.join(item.identity for item in outstanding)}. "
             f"Validation details: {details[:2400]}. "
             "Progress was saved; resume to retry only these paragraphs."
@@ -2440,7 +2567,29 @@ class MarkerWorkflow:
                 "id": aliases.get(item.identity, item.identity),
                 "expected_marker_counts": dict(counts),
             }
-            retry_instructions = []
+            retry_instructions = [
+                "Write only translated book prose inside the unit. Do not add "
+                "Markdown backticks, code fences, headings, explanations, or "
+                "translator commentary absent from the source. Preserve any "
+                "such punctuation that is actually present in the source."
+            ]
+            # Whitelisted corrections describe the failed constraint without
+            # echoing model text or arbitrary exception text into a prompt.
+            error = getattr(item, "last_error", "") or ""
+            if "source" in error and any(term in error for term in (
+                "unchanged", "writing system", "language", "Han-only"
+            )):
+                retry_instructions.append(
+                    "Translate all prose outside the supplied markers into "
+                    "the requested target language, including titles and "
+                    "unmarked names; do not copy source-language prose."
+                )
+            if getattr(item, "last_stage", "") == "response":
+                retry_instructions.append(
+                    "Return one complete bbm-response XML document, with "
+                    "each requested id exactly once. Do not restart the "
+                    "document or repeat units. Escape XML special characters."
+                )
             for detail in getattr(item, "last_failure", None) or ():
                 if not isinstance(detail, dict):
                     continue
@@ -2574,16 +2723,64 @@ class MarkerWorkflow:
         validate_quality([item.source], [translation])
         return delta
 
+    def _unprotected_source_label_occurrences(self, item, label):
+        """Count exact label mentions outside markers in one prepared unit."""
+        try:
+            segments = [
+                value for kind, value in marker_parts(item.source) if kind == "text"
+            ]
+        except MarkerError:
+            return 0
+        count = sum(segment.count(label) for segment in segments)
+        if not count:
+            return 0
+        # Do not treat a short known label inside a longer known name as an
+        # independently authorized plain mention. This keeps partial names
+        # from being normalized just because their characters occur inside a
+        # larger unprotected expression.
+        for candidate in self.catalogue:
+            if candidate == label or len(candidate) <= len(label) or label not in candidate:
+                continue
+            if any(candidate in segment for segment in segments):
+                return 0
+        return count
+
+    def _is_unprotected_catalogue_marker_excess(self, item, error):
+        """Whether every extra marker wraps a known, unprotected source name."""
+        details = getattr(error, "label_details", None)
+        if not details or any(
+            not isinstance(detail, dict) or detail.get("kind") != "excess"
+            for detail in details
+        ):
+            return False
+        try:
+            expected = Counter(markers(item.source))
+        except MarkerError:
+            return False
+        for detail in details:
+            label = detail.get("label")
+            extra_count = detail.get("requested", 0) - detail.get("available", 0)
+            if (
+                not isinstance(label, str)
+                or expected.get(label, 0) != 0
+                or label not in self.catalogue
+                or extra_count < 1
+                or self._unprotected_source_label_occurrences(item, label) < extra_count
+            ):
+                return False
+        return True
+
     def _normalize_excess_marker_candidate(
         self, item, translation, error, validate_quality, mapping_attempted
     ):
         """Demote only surplus copies of source-authorized markers.
 
-        This fallback runs only after the translation retry budget is exhausted.
-        It requires an excess-only count mismatch, an existing source
-        catalogue entry for every excess label, and a validated target-language
-        display mapping. Missing markers and model-invented labels are never
-        normalized.
+        Ordinary duplicate markers are considered after the translation retry
+        budget is exhausted. A known catalogue label that appears literally in
+        unprotected source can be considered immediately, but only when no
+        protected span expects that label. Every demotion requires a validated
+        target-language display mapping. Missing markers and model-invented
+        labels are never normalized.
         """
         details = getattr(error, "label_details", None)
         if not details or any(
@@ -2604,9 +2801,13 @@ class MarkerWorkflow:
             return None
         for label, count in excess.items():
             detail = detail_by_label[label]
+            source_authorized = (
+                expected.get(label, 0) > 0
+                or self._unprotected_source_label_occurrences(item, label) >= count
+            )
             if (
-                expected.get(label, 0) < 1
-                or detail.get("available") != expected[label]
+                not source_authorized
+                or detail.get("available") != expected.get(label, 0)
                 or detail.get("requested") != actual[label]
                 or label not in self.catalogue
             ):
@@ -2640,11 +2841,10 @@ class MarkerWorkflow:
                 deepcopy(self.state.get("mapping") or {}),
             )
             print(
-                "[yellow]Protected names: excess markers remain after "
-                f"exhausting {item.attempts} translation attempts. Requesting "
-                "targeted display mappings only for the source-marked labels "
-                f"{', '.join(missing_targets)} before considering a safe "
-                "plain-text correction.[/yellow]"
+                "[yellow]Protected names: extra markers are source-authorized "
+                "but need a validated display mapping before correction. "
+                f"Requesting mappings for: {', '.join(missing_targets)} "
+                f"(translation attempt {item.attempts}).[/yellow]"
             )
             diagnostic_fields = (
                 "_protected_last_request",
@@ -2743,8 +2943,8 @@ class MarkerWorkflow:
             return None
         print(
             f"[yellow]Protected names: validated a plain display target for "
-            f"{len(targets)} excess marker label(s); preserving exactly the "
-            "source-marked occurrences.[/yellow]"
+            f"{len(targets)} excess marker label(s); preserving expected "
+            "source markers and normalizing only source-authorized extras.[/yellow]"
         )
         return normalized, delta, demoted
 
@@ -3772,7 +3972,7 @@ class MarkerWorkflow:
                 if (
                     not isinstance(summary, str)
                     or validation.get("input_sha256") != input_digest
-                    or validation.get("version") != 1
+                    or validation.get("version") not in (1, 2)
                 ):
                     raise MarkerValidationError(
                         f"Saved summary checkpoint for {window.identity} failed its "
@@ -3912,7 +4112,8 @@ class MarkerWorkflow:
     def commit_window_summary(
         self, window, summary, *, language, budget,
         request_sha256=None, validation_version=1, repaired_markers=0,
-        summary_policy=None,
+        summary_policy=None, estimated_tokens=None,
+        provider_completion_tokens=None, provider_model=None,
     ):
         record = self.prepared_window(window)
         if record is None:
@@ -3925,7 +4126,22 @@ class MarkerWorkflow:
             "policy": summary_policy,
             "language": language,
             "budget_tokens": budget,
-            "estimated_tokens": _tokens(summary),
+            "estimated_tokens": (
+                _tokens(summary)
+                if estimated_tokens is None
+                else int(estimated_tokens)
+            ),
+            "provider_completion_tokens": (
+                int(provider_completion_tokens)
+                if provider_completion_tokens is not None
+                else None
+            ),
+            "provider_model": provider_model,
+            "budget_metric": (
+                "provider_completion_tokens"
+                if provider_completion_tokens is not None
+                else "estimated_tokens"
+            ),
             "request_sha256": request_sha256,
             "repaired_markers": int(repaired_markers),
             "input_sha256": self._source_digest(
@@ -4135,7 +4351,14 @@ class MarkerWorkflow:
                     f"failed on attempt {attempt}/3: {error}; retrying the same text.[/yellow]"
                 )
                 self._backoff(attempt)
-        raise MarkerValidationError(
+        error_type = (
+            RecoverableWorkflowError
+            if last_error is not None and self._retryable(last_error)
+            and not isinstance(last_error, ProviderRefusal)
+            and not getattr(self.model, "_fatal_error_detected", False)
+            else MarkerValidationError
+        )
+        raise error_type(
             f"Auxiliary name extraction failed for {identity!r} after "
             f"{attempted}/3 attempts: "
             f"{last_error}. No localized translation was sent; recovery is saved."
@@ -4145,6 +4368,7 @@ class MarkerWorkflow:
         """Extract once, validate, locally mark, and checkpoint a whole window."""
         from book_maker.source_windows import (
             SourceWindowError,
+            EXTRACTION_MAX_ATTEMPTS,
             EXTRACTION_OUTPUT_TOKENS,
             EXTRACTION_PROMPT_VERSION,
             collect_unverified_name_suggestions,
@@ -4222,7 +4446,7 @@ class MarkerWorkflow:
         # Reuse exact-source candidates from earlier structurally valid replies
         # for this same window. They still require an explicit decision in the
         # final valid reply; a rejected reply never approves its own names.
-        limit = 3
+        limit = EXTRACTION_MAX_ATTEMPTS
         last_error = None
         attempted = 0
         for attempt in range(1, limit + 1):
@@ -4381,7 +4605,14 @@ class MarkerWorkflow:
             "state remain saved; fix the provider response or configuration and resume."
         )
         self._record_failure("window-name-extraction-exhausted", "", detail)
-        raise MarkerValidationError(detail) from last_error
+        error_type = (
+            RecoverableWorkflowError
+            if last_error is not None and self._retryable(last_error)
+            and not isinstance(last_error, ProviderRefusal)
+            and not getattr(self.model, "_fatal_error_detected", False)
+            else MarkerValidationError
+        )
+        raise error_type(detail) from last_error
 
     def summarize_source_window(
         self, window, *, persist=None, source_language=None, budget=1500
@@ -4392,7 +4623,10 @@ class MarkerWorkflow:
             ProviderResponseUnusable,
             classify_provider_reply,
         )
-        from book_maker.source_windows import source_summary_prompt
+        from book_maker.source_windows import (
+            source_summary_compression_prompt,
+            source_summary_prompt,
+        )
         from book_maker.translation_quality import _detected_language
         from book_maker.utils import language_code, num_tokens_from_text
 
@@ -4421,8 +4655,16 @@ class MarkerWorkflow:
         prior = record.get("incoming_summary") or ""
         hard_budget = max(1, int(budget))
         target_budget = hard_budget
+        request_output_cap = hard_budget
+        minimum_request_output_cap = min(hard_budget, 5000)
         prior_estimated = max(0, int(num_tokens_from_text(prior))) if prior else 0
-        minimum_tokens = min(hard_budget, int(prior_estimated * 0.70))
+        # Keep a substantial local-estimate floor while leaving room to merge
+        # the current window. Provider usage can use a different tokenizer; the
+        # floor is scaled into provider-token units when that usage is reported.
+        # An oversized legacy context still needs room to shrink. Requiring
+        # the entire hard cap as a minimum leaves a zero-width acceptance
+        # interval and makes otherwise valid compression impossible.
+        minimum_tokens = int(min(hard_budget, prior_estimated) * 0.60)
 
         def make_prompt():
             return source_summary_prompt(
@@ -4436,6 +4678,7 @@ class MarkerWorkflow:
             )
 
         prompt = make_prompt()
+        prompt_mode = "merge prior summary with current source window"
         language_name = source_language or "source-window language"
         language_code_expected = language_code(source_language) if source_language else None
         limit = max(1, int(getattr(self.model, "max_chunk_attempts", 5)))
@@ -4448,18 +4691,65 @@ class MarkerWorkflow:
         for attempt in range(1, limit + 1):
             responded = False
             raw = None
+            response_metadata = None
             oversized_estimate = None
+            oversized_measure = None
+            oversized_metric_label = "estimated tokens"
             minimum_estimate = None
+            minimum_required_for_error = None
+            minimum_metric_label = "estimated tokens"
+            provider_completion_tokens = None
+            provider_model = None
             try:
                 print(
                     f"Protected names: updating cumulative original-language summary "
-                    f"for {window.identity} (attempt {attempt}/{limit}, "
-                    f"budget {budget} estimated tokens)."
+                    f"for {window.identity} (attempt {attempt}/{limit}; "
+                    f"{prompt_mode}; configured output cap {hard_budget} tokens; "
+                    f"this request cap {request_output_cap} tokens; provider usage "
+                    "will be preferred when reported)."
                 )
-                raw = hook(prompt + feedback, max_tokens=hard_budget)
+                if request_output_cap != hard_budget:
+                    print(
+                        "Protected names: this retry has a smaller provider output "
+                        "allowance after upstream timeouts; the saved summary hard "
+                        f"budget remains {hard_budget} tokens."
+                    )
+                metadata_before = getattr(
+                    self.model, "_protected_response_metadata", None
+                )
+                metadata_before_id = (
+                    metadata_before.get("attempt_id")
+                    if isinstance(metadata_before, dict)
+                    else None
+                )
+                raw = hook(prompt + feedback, max_tokens=request_output_cap)
                 responded = True
                 self._protected_last_response = raw
+                response_metadata = getattr(
+                    self.model, "_protected_response_metadata", None
+                )
+                if isinstance(response_metadata, dict) and (
+                    response_metadata is not metadata_before
+                    or response_metadata.get("attempt_id") != metadata_before_id
+                ):
+                    provider_model = response_metadata.get("model")
+                    usage = response_metadata.get("usage")
+                    if isinstance(usage, dict):
+                        try:
+                            usage_count = int(usage.get("completion_tokens"))
+                            if usage_count > 0:
+                                provider_completion_tokens = usage_count
+                        except (TypeError, ValueError):
+                            pass
                 summary = raw.strip() if isinstance(raw, str) else ""
+                if (
+                    isinstance(response_metadata, dict)
+                    and response_metadata.get("finish_reason") == "length"
+                ):
+                    raise MarkerValidationError(
+                        "Cumulative summary response was truncated by the provider "
+                        f"output cap ({request_output_cap} tokens)."
+                    )
                 category, _matched = classify_provider_reply(summary)
                 if category == "provider-error":
                     raise ProviderResponseUnusable(summary)
@@ -4476,19 +4766,54 @@ class MarkerWorkflow:
                     summary, self.known_labels, check_plain_labels=False
                 )
                 estimated = max(1, int(num_tokens_from_text(summary)))
-                if estimated > hard_budget:
+                budget_measure = (
+                    provider_completion_tokens
+                    if provider_completion_tokens is not None
+                    else estimated
+                )
+                budget_metric_label = (
+                    "provider-reported completion tokens"
+                    if provider_completion_tokens is not None
+                    else "estimated tokens"
+                )
+                if provider_completion_tokens is not None:
+                    minimum_scale = provider_completion_tokens / estimated
+                else:
+                    minimum_scale = 1.0
+                minimum_required_estimate = min(minimum_tokens, target_budget)
+                minimum_required_for_error = max(
+                    1,
+                    int(minimum_required_estimate * minimum_scale + 0.9999),
+                )
+                minimum_metric_label = budget_metric_label
+                if budget_measure > hard_budget:
                     oversized_estimate = estimated
+                    oversized_measure = budget_measure
+                    oversized_metric_label = budget_metric_label
+                    if provider_completion_tokens is not None:
+                        message = (
+                            f"Summary uses {budget_measure} provider-reported "
+                            f"completion tokens (local estimate {estimated}), over "
+                            f"the --source-summary-tokens={hard_budget} limit."
+                        )
+                    else:
+                        message = (
+                            f"Summary uses {estimated} estimated tokens, over the "
+                            f"--source-summary-tokens={hard_budget} limit."
+                        )
                     raise MarkerValidationError(
-                        f"Summary uses {estimated} estimated tokens, over the "
-                        f"--source-summary-tokens={hard_budget} limit."
+                        message
                     )
-                minimum_required = min(minimum_tokens, target_budget)
-                if minimum_required and estimated < minimum_required:
-                    minimum_estimate = estimated
+                if (
+                    minimum_required_estimate
+                    and budget_measure < minimum_required_for_error
+                ):
+                    minimum_estimate = budget_measure
                     raise MarkerValidationError(
-                        f"Summary uses {estimated} estimated tokens, below the "
-                        f"{minimum_required}-token minimum needed to preserve "
-                        "cumulative coverage from earlier windows."
+                        f"Summary uses {budget_measure} {budget_metric_label}, below "
+                        f"the {minimum_required_for_error}-token minimum needed to "
+                        "preserve cumulative coverage from earlier windows "
+                        f"(local estimate {estimated})."
                     )
                 prose = strip_markers(summary)
                 observed = _detected_language(prose)
@@ -4509,7 +4834,11 @@ class MarkerWorkflow:
                     budget=hard_budget,
                     request_sha256=self._source_digest(prompt + feedback),
                     repaired_markers=repaired,
+                    validation_version=2,
                     summary_policy=SOURCE_SUMMARY_POLICY,
+                    estimated_tokens=estimated,
+                    provider_completion_tokens=provider_completion_tokens,
+                    provider_model=provider_model,
                 )
                 if persist is not None:
                     try:
@@ -4524,9 +4853,15 @@ class MarkerWorkflow:
                         raise failure from error
                 print(
                     f"Protected names: summarized {window.identity} after all "
-                    f"{len(window.units)} source units were accepted "
-                    f"({estimated}/{budget} estimated tokens, cumulative through "
-                    "this window)."
+                    f"{len(window.units)} source units were accepted ("
+                    + (
+                        f"{provider_completion_tokens} provider-reported completion "
+                        f"tokens; local estimate {estimated}; configured cap {budget} "
+                        "provider tokens, cumulative through this window)."
+                        if provider_completion_tokens is not None
+                        else f"{estimated}/{budget} estimated tokens, cumulative "
+                        "through this window)."
+                    )
                 )
                 return summary
             except Exception as error:
@@ -4546,53 +4881,122 @@ class MarkerWorkflow:
                     break
                 if oversized_estimate is not None:
                     target_budget = max(1, int(target_budget * 0.85))
-                    prompt = make_prompt()
-                    feedback = (
-                        "\n\nThe previous draft measured "
-                        f"{oversized_estimate} estimated tokens, exceeding the hard "
-                        f"limit of {hard_budget}. Compress it further and target no "
-                        f"more than {target_budget} estimated tokens; preserve the "
-                        "main characters and relationships, consequential events, "
-                        "unresolved threads, and current situation."
+                    target_characters = max(
+                        1,
+                        int(
+                            len(summary)
+                            * target_budget
+                            / max(1, oversized_estimate)
+                        ),
                     )
+                    prompt = source_summary_compression_prompt(
+                        summary,
+                        source_language,
+                        hard_budget,
+                        target_budget,
+                        minimum_budget=min(minimum_tokens, target_budget),
+                        target_characters=target_characters,
+                    )
+                    prompt_mode = (
+                        "compress previous cumulative draft only "
+                        f"(target {target_budget} estimated tokens, about "
+                        f"{target_characters} characters)"
+                    )
+                    feedback = ""
                     print(
                         f"[yellow]Protected names: cumulative summary for "
                         f"{window.identity} exceeded the {hard_budget}-token hard "
                         f"limit on attempt {attempt}/{limit} "
-                        f"({oversized_estimate} estimated tokens). Lowering the "
-                        f"next prompt target to {target_budget}; accepted "
-                        "translations and the prior summary remain saved.[/yellow]"
+                        f"({oversized_measure} {oversized_metric_label}; local "
+                        f"estimate {oversized_estimate}). The next request "
+                        f"will compress this draft only to about {target_characters} "
+                        f"characters / {target_budget} estimated tokens instead of "
+                        "resending the full source window; accepted translations "
+                        "and the incoming summary remain saved.[/yellow]"
                     )
                     self._backoff(
                         attempt, stage=f"Cumulative summary for {window.identity}"
                     )
                     continue
                 if minimum_estimate is not None:
-                    minimum_required = min(minimum_tokens, target_budget)
+                    minimum_required = minimum_required_for_error
+                    previous_request_cap = request_output_cap
+                    request_output_cap = hard_budget
+                    prompt = make_prompt()
+                    prompt_mode = "merge prior summary with current source window"
                     feedback = (
                         "\n\nThe previous cumulative draft measured "
-                        f"{minimum_estimate} estimated tokens, below the required "
-                        f"minimum of {minimum_required}. Expand it by retaining "
+                        f"{minimum_estimate} {minimum_metric_label}, below the "
+                        f"required minimum of {minimum_required}. Expand it by retaining "
                         "more consequential facts from the prior summary while "
                         "adding the current window's events. Keep it below the "
-                        f"hard limit of {hard_budget} estimated tokens."
+                        f"configured output cap of {hard_budget} tokens; the local "
+                        "estimate is recorded separately."
                     )
                     print(
                         f"[yellow]Protected names: cumulative summary for "
                         f"{window.identity} was too short on attempt "
-                        f"{attempt}/{limit} ({minimum_estimate} estimated tokens; "
+                        f"{attempt}/{limit} ({minimum_estimate} "
+                        f"{minimum_metric_label}; "
                         f"minimum {minimum_required}). Asking for a fuller "
                         "cumulative summary; accepted translations and the prior "
                         "summary remain saved.[/yellow]"
                     )
+                    if previous_request_cap != hard_budget:
+                        print(
+                            f"Protected names: restoring the full "
+                            f"{hard_budget}-token request cap because the smaller "
+                            "response did not meet the cumulative-coverage minimum."
+                        )
                     self._backoff(
                         attempt, stage=f"Cumulative summary for {window.identity}"
+                    )
+                    continue
+                if (
+                    isinstance(response_metadata, dict)
+                    and response_metadata.get("finish_reason") == "length"
+                    and request_output_cap < hard_budget
+                ):
+                    truncated_request_cap = request_output_cap
+                    request_output_cap = hard_budget
+                    prompt = make_prompt()
+                    prompt_mode = "full-budget cumulative summary after truncation"
+                    feedback = (
+                        "\n\nThe previous summary was cut off by the provider's "
+                        "output limit. Return a complete cumulative summary; compress "
+                        "repetition and low-impact detail before omitting earlier arcs. "
+                        f"The hard output cap is {hard_budget} tokens."
+                    )
+                    print(
+                        f"[yellow]Protected names: provider truncated the summary "
+                        f"at {truncated_request_cap} tokens on attempt {attempt}/{limit}; "
+                        f"restoring the full {hard_budget}-token cap for a complete "
+                        "summary. Accepted translations and the prior summary "
+                        "remain saved.[/yellow]"
+                    )
+                    self._backoff(
+                        attempt,
+                        stage=f"Cumulative summary for {window.identity}",
                     )
                     continue
                 if isinstance(error, ProviderResponseUnusable) or not responded:
                     # A provider failure carries no draft to correct. Re-ask the
                     # same prompt after a longer pause; appending validation
                     # feedback here would only grow a request that never ran.
+                    if not responded and request_output_cap > minimum_request_output_cap:
+                        previous_cap = request_output_cap
+                        request_output_cap = max(
+                            minimum_request_output_cap,
+                            int(request_output_cap * 0.7),
+                        )
+                        print(
+                            f"[yellow]Protected names: provider returned no usable "
+                            f"summary reply on attempt {attempt}/{limit}; the next "
+                            f"request output cap will drop from {previous_cap} to "
+                            f"{request_output_cap} tokens. The saved validation "
+                            f"budget remains {hard_budget}; a short or truncated "
+                            "summary will be rejected.[/yellow]"
+                        )
                     print(
                         f"[yellow]Protected names: cumulative summary for "
                         f"{window.identity} got no usable provider reply on "
@@ -4636,4 +5040,11 @@ class MarkerWorkflow:
                 raise MarkerValidationError(detail) from error
         if record.get("status") == "complete" and record.get("outgoing_summary"):
             return record["outgoing_summary"]
-        raise MarkerValidationError(detail) from last_error
+        error_type = (
+            RecoverableWorkflowError
+            if last_error is not None and self._retryable(last_error)
+            and not isinstance(last_error, ProviderRefusal)
+            and not getattr(self.model, "_fatal_error_detected", False)
+            else MarkerValidationError
+        )
+        raise error_type(detail) from last_error

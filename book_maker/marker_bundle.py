@@ -423,14 +423,42 @@ def validate_state(state):
                 if not isinstance(record.get("summary_validation"), dict):
                     raise BundleError("Completed source window has no summary validation metadata")
                 validation = record["summary_validation"]
+                validation_version = validation.get("version")
+                budget_metric = validation.get("budget_metric", "estimated_tokens")
+                provider_tokens = validation.get("provider_completion_tokens")
+                budget_tokens = validation.get("budget_tokens")
+                estimated_tokens = validation.get("estimated_tokens")
+                local_estimate_ok = (
+                    isinstance(estimated_tokens, int)
+                    and isinstance(budget_tokens, int)
+                    and estimated_tokens <= budget_tokens
+                )
+                summary_budget_ok = (
+                    local_estimate_ok
+                    if budget_metric == "estimated_tokens"
+                    else (
+                        validation_version == 2
+                        and budget_metric == "provider_completion_tokens"
+                        and isinstance(provider_tokens, int)
+                        and isinstance(budget_tokens, int)
+                        and provider_tokens <= budget_tokens
+                    )
+                )
                 if (
-                    validation.get("version") != 1
+                    validation_version not in (1, 2)
                     or validation.get("policy")
                     not in (None, "plain-labels-allowed-v1")
                     or not isinstance(validation.get("language"), str)
                     or not isinstance(validation.get("budget_tokens"), int)
                     or not isinstance(validation.get("estimated_tokens"), int)
-                    or validation["estimated_tokens"] > validation["budget_tokens"]
+                    or not summary_budget_ok
+                    or (
+                        provider_tokens is not None
+                        and (
+                            not isinstance(provider_tokens, int)
+                            or provider_tokens < 1
+                        )
+                    )
                     or not isinstance(validation.get("input_sha256"), str)
                     or not re.fullmatch(r"[0-9a-f]{64}", validation["input_sha256"])
                     or not isinstance(validation.get("request_sha256"), str)

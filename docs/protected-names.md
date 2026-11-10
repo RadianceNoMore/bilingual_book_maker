@@ -1,4 +1,7 @@
-Retries send only outstanding paragraphs using the normal translation prompt and the context captured before the batch. Validation errors remain local; partial batch results and retry instructions are not sent to the model. Accepted results are still saved immediately.
+Retries send only outstanding paragraphs with the context captured before the
+batch. Rejected output and raw validation errors remain local; prepared-window
+repairs receive source-derived marker counts and fixed protocol/quality
+instructions. Accepted results are saved immediately.
 
 # Protected names: source windows, exact markers, and CSS
 
@@ -31,6 +34,14 @@ translation chunks do not receive target-language history. Extraction and
 summary are independent provider stages, and token-triggered session
 compaction is disabled in this workflow.
 
+Read-only translation context renders any saved name placeholders as plain
+source names, including older summaries with an extra trailing dollar sign.
+Prepared requests containing no markers use ordinary XML translation
+instructions without placeholder examples. The returned units still undergo
+the same exact marker-count, identity, and translation-quality validation.
+Numeric-only title and navigation labels are preserved locally without name
+extraction or translation requests.
+
 ## Run
 
 ```powershell
@@ -47,17 +58,39 @@ Useful launcher values:
 
 - `-MaxUnits` (default 40) caps body request units and pending mapping entries.
 - `-MaxTokens` (default 4000) caps body and mapping request tokens.
-- `-ChunkAttempts` (default 5) bounds each paragraph's marker-repair sends in
-  protected-name mode (including its first request) and bounds display-mapping
-  attempts. `--retry-one-by-one` is ignored there: marker mode always repairs
+- `-ChunkAttempts` (default 5) bounds each paragraph's content-validation
+  attempts and its independent response-protocol failures in v2. Missing,
+  ambiguous, malformed, or provider-error responses do not consume the content
+  allowance. Both budgets are finite; transport has its own circuit breaker.
+  The same setting bounds display-mapping attempts. `--retry-one-by-one` is ignored there: marker mode always repairs
   the outstanding failed paragraphs together.
 - `-NameWindowTokens` (default 8192) bounds original-source extraction
   windows.
 - `-SourceSummaryTokens` (default 1500) bounds the cumulative source-language
-  summary.
+  summary. The workflow uses the provider's completion-token usage when it is
+  returned; otherwise it falls back to the local token estimate. The checkpoint
+  records both values when available.
 - `--request-max-units` and `--request-max-tokens` bound translation chunks;
   they never combine different source windows.
 - `-WholeChapter` and `-AccumulateAcrossChapters` retain their usual meaning.
+
+The launcher supervises known retryable stage exhaustion automatically. It
+verifies the saved EPUB, waits 30 seconds (up to 120 seconds after repeated
+stalls), then resumes unfinished work with the same options. Three consecutive
+resumes without durable book progress stop with the recovery preserved. Only
+prepared windows, accepted unit identities, completed summaries, mappings, and
+localizations count as progress; extra attempts and diagnostics do not.
+Refusals, invalid plans/configuration, interruption, and failed checkpoint
+writes stop directly. Direct `make_book.py` callers receive exit 75 for a
+verified resumable failure; the launcher uses `book_maker.supervisor` to handle
+that exit. Other nonzero exits are never automatically restarted.
+
+Response framing failures also reduce a persistent request cap for subsequent
+chunks and resumes. Eight well-framed responses allow gradual growth again,
+within the caller's original cap. Frozen source membership and provider aliases
+stay unchanged. Summary prompts request plain source-language names rather
+than teaching optional placeholder syntax; existing saved summaries remain
+compatible and validation stays active.
 
 Direct Python runs add `--protected-names`. The route must be
 OpenAI-compatible and provide paragraph, name-extraction, source-summary, and
@@ -80,9 +113,12 @@ The extraction response is one JSON object with `window_id`, a `names` array
 of exact source strings, and an `excluded_candidates` array (normally empty).
 Source locations and witness unit IDs are derived locally, so the model does
 not reproduce long paragraph IDs. Legacy objects containing `source` and one
-literal witness `unit_ids` entry are still validated strictly. Nonliteral
-spellings, extra keys, and malformed or truncated JSON stop before body
-translation. An explicit empty names array means no names were found.
+literal witness `unit_ids` entry are still validated strictly. A plain-string
+name suggestion absent from the current window is discarded and reported; it
+cannot enter the catalogue or block valid source-grounded names in the same
+reply. Invalid rows or citations, extra keys, and malformed or truncated JSON
+stop before body translation. An explicit empty names array means no names
+were found.
 
 Retries use the same schema and supply grounded candidates from earlier
 well-formed rejected responses. Repeated exact-source candidate exclusions,
@@ -95,14 +131,15 @@ exclusions field is accepted when no candidate remains undecided. Rejected
 responses never directly populate the catalogue. Resume
 recovers candidates only from requests matching the exact ordered window
 source. The preparation record hashes the actual successful request, including
-its retry data. A malformed response may retry within the bounded extraction
-budget; syntactically damaged responses are not salvaged into approved names.
+its retry data. An invalid extraction gets up to five bounded attempts;
+syntactically damaged responses are not salvaged into approved names.
 
 Retries keep exact-source candidates separate from unverified name suggestions.
-An unverified suggestion is a valid string proposed in `names` by an earlier
-reply but absent from every current-window source unit. It may be omitted on
-retry (an implicit discard) or explicitly excluded; it can never be accepted as
-a name or added to the catalogue.
+An unverified suggestion is a valid string proposed in `names` but absent from
+every current-window source unit. It is discarded with a diagnostic, may be
+omitted or explicitly excluded on retry, and can never be accepted as a name or
+added to the catalogue. The same source check applies to a new off-window
+suggestion in the current reply.
 The source-occurrence rule applies to proposed names and to exclusions of
 context-only or unverified labels: those labels must be absent from the current
 window. A previously recorded unverified suggestion repeated in both `names`
@@ -141,9 +178,15 @@ and frozen context. A resume reuses committed extraction and accepted work.
 
 The cumulative summary is generated from the original-language source, not
 translated prose. It must retain earlier consequential facts while adding the
-current window, fit `--source-summary-tokens`, use the source language, and
-contain only known exact labels inside `${...}`. If summary generation fails,
-the accepted translations and previous summary remain saved, and the next
+current window, fit `--source-summary-tokens` using provider-reported output
+usage when available (or the local estimate otherwise), use the source language,
+and contain only known exact labels inside `${...}`. Summary failures use the
+workflow's bounded retry loop without an additional hidden SDK retry. After an
+upstream timeout, later requests progressively lower only the provider output
+cap to 5,000 tokens or the configured cap, whichever is lower; the configured
+summary validation cap remains unchanged. A truncated or too-short reply
+restores the full request cap and is rejected. If summary generation fails,
+accepted translations and the previous summary remain saved, and the next
 window does not start. Resume retries the pending summary only.
 
 Exact local matching cannot guarantee that extraction found every name or

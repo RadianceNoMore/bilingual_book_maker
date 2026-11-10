@@ -32,6 +32,40 @@ class FakeModel:
         self.session = SessionHistory()
 
 
+def test_translation_context_flattens_saved_markers_without_changing_units():
+    from book_maker.marker_workflow import assemble_marker_request
+
+    context = {
+        "summary": "${美琴}$与${黑子}相遇。A & B < C",
+        "accepted_source_prefix": "${黑子}$说话。",
+    }
+    original = deepcopy(context)
+    payload = '<bbm-request><bbm-unit id="a">${美琴}来了。</bbm-unit></bbm-request>'
+    request = assemble_marker_request(payload, premarked=True, context=context)
+
+    assert "<prior-summary>美琴与黑子相遇。A &amp; B &lt; C</prior-summary>" in request
+    assert "<accepted-source-prefix>黑子说话。</accepted-source-prefix>" in request
+    assert payload in request
+    assert context == original
+
+
+def test_marker_free_prepared_request_does_not_teach_placeholder_syntax():
+    from book_maker.marker_workflow import assemble_marker_request
+
+    payload = '<bbm-request><bbm-unit id="a">黑子笑了。</bbm-unit></bbm-request>'
+    request = assemble_marker_request(
+        payload,
+        premarked=True,
+        feedback="Rejected placeholder: ${黑子}",
+        context={"summary": "${黑子}$到了。"},
+    )
+    assert payload in request
+    assert "<prior-summary>黑子到了。</prior-summary>" in request
+    assert "${" not in request
+    assert "ordinary target-language prose" in request
+    assert "exactly one bbm-unit for each requested id" in request
+
+
 def _job(identity, text, index, group="chapter-1"):
     return SimpleNamespace(
         job_id=identity,

@@ -17,6 +17,11 @@ an individual chunk to the Venice guest bridge only when its Gemini reply is
 the standalone policy refusal, starting the Venice gateway on demand. -Resume
 still picks up where a refused run saved its progress.
 
+Retryable provider/validation stage exhaustion is supervised automatically:
+the saved EPUB is verified, then only unfinished work resumes after a cooldown.
+Three consecutive resumes without durable book progress stop the supervisor.
+Refusals, invalid configuration, interrupted runs, and failed saves stop directly.
+
 .PARAMETER Resume
 Resume the newest compatible partial recovery in "ongoing".
 
@@ -24,7 +29,8 @@ Resume the newest compatible partial recovery in "ongoing".
 Source EPUB path.
 
 .PARAMETER ChunkAttempts
-Per-paragraph marker-repair send limit and display-mapping attempt limit
+Per-paragraph content-validation and independent response-protocol failure limit,
+and display-mapping attempt limit
 (default 5). Failed paragraphs are repaired together; accepted neighbours are
 never retranslated with them.
 
@@ -38,7 +44,8 @@ Body and mapping request token cap (default 4000).
 Maximum original-language source tokens inspected in one name-extraction request (default 8192).
 
 .PARAMETER SourceSummaryTokens
-Maximum estimated tokens in the cumulative original-language story summary (default 1500).
+Maximum provider-reported output tokens in the cumulative original-language
+story summary when available; otherwise the local estimate is used (default 1500).
 
 .PARAMETER VeniceFallbackLimit
 Maximum Gemini policy refusals this workflow may reroute to the Venice guest
@@ -101,6 +108,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $exitCode = 1
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$activeFallbackPort = $FallbackPort
 
 # --- Venice refusal fallback (scripts/refusal_fallback_proxy.py) -------------
 #
@@ -182,14 +190,41 @@ function Start-VeniceFallbackGateway {
 }
 
 function Start-RefusalFallbackProxy {
-    $healthUrl = "http://127.0.0.1:$FallbackPort/health"
+    $healthUrl = "http://127.0.0.1:$activeFallbackPort/health"
     if (Test-ServiceHealth -HealthUrl $healthUrl -ServicePattern 'bbm-refusal-fallback-proxy') {
-        Write-Host "Refusal-fallback proxy: already running on port $FallbackPort (reusing its own settings; stop that process to apply changed ports or budgets)."
-        return $true
+        $existingHealth = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+        $existingGeminiTimeout = 0.0
+        if ($null -ne $existingHealth.timeouts) {
+            $existingGeminiTimeout = [double]$existingHealth.timeouts.gemini_seconds
+        }
+        if ($existingGeminiTimeout -lt 420.0) {
+            $stalePort = $activeFallbackPort
+            $alternativeFound = $false
+            $lastCandidate = [Math]::Min(65535, $FallbackPort + 20)
+            for ($candidatePort = ($FallbackPort + 1); $candidatePort -le $lastCandidate; $candidatePort++) {
+                $candidateListener = Get-NetTCPConnection -LocalPort $candidatePort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($null -eq $candidateListener) {
+                    $activeFallbackPort = [int]$candidatePort
+                    $script:activeFallbackPort = $activeFallbackPort
+                    $healthUrl = "http://127.0.0.1:$activeFallbackPort/health"
+                    $alternativeFound = $true
+                    break
+                }
+            }
+            if (-not $alternativeFound) {
+                [Console]::Error.WriteLine("Refusal-fallback proxy: port $stalePort has an outdated $existingGeminiTimeout-second Gemini timeout and no free port was found in $($FallbackPort + 1)-$lastCandidate. Venice fallback is disabled for this run; gemini-anon will be used directly.")
+                return $false
+            }
+            Write-Host "Refusal-fallback proxy: keeping the shared outdated listener on port $stalePort intact; starting a fresh 420-second proxy on port $activeFallbackPort."
+        }
+        else {
+            Write-Host "Refusal-fallback proxy: already running on port $activeFallbackPort with Gemini timeout $existingGeminiTimeout seconds (reusing it)."
+            return $true
+        }
     }
-    $squatting = Get-NetTCPConnection -LocalPort $FallbackPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    $squatting = Get-NetTCPConnection -LocalPort $activeFallbackPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -ne $squatting) {
-        [Console]::Error.WriteLine("Refusal-fallback proxy: port $FallbackPort is held by PID $($squatting.OwningProcess) and is not the fallback proxy; pass a different -FallbackPort. Refusals will pass through unrescued.")
+        [Console]::Error.WriteLine("Refusal-fallback proxy: port $activeFallbackPort is held by PID $($squatting.OwningProcess) and is not the fallback proxy; pass a different -FallbackPort. Refusals will pass through unrescued.")
         return $false
     }
     $proxyPath = Join-Path $PSScriptRoot 'refusal_fallback_proxy.py'
@@ -197,24 +232,30 @@ function Start-RefusalFallbackProxy {
         [Console]::Error.WriteLine("Refusal-fallback proxy: $proxyPath is missing; run without the fallback or restore the file.")
         return $false
     }
-    Write-Host "Refusal-fallback proxy: starting on port $FallbackPort (forwards to gemini-anon on 4995, rescues refused chunks with Venice on $VenicePort)..."
+    Write-Host "Refusal-fallback proxy: starting on port $activeFallbackPort with a 420-second Gemini timeout (forwards to gemini-anon on 4995, rescues refused chunks with Venice on $VenicePort)..."
     $argLine = @(
         '-X utf8',
         ('"' + $proxyPath + '"'),
-        ('--listen-port ' + $FallbackPort),
+        ('--listen-port ' + $activeFallbackPort),
         '--gemini-url http://127.0.0.1:4995/v1',
         ('--venice-url http://127.0.0.1:' + $VenicePort + '/v1'),
         ('--venice-dir "' + $VeniceDir + '"'),
         ('--venice-python "' + $GatewayPython + '"'),
         ('--venice-limit ' + $VeniceFallbackLimit),
+        '--gemini-timeout 420',
         ('--log-file "' + $veniceFallbackLog + '"')
     ) -join ' '
     Start-Process -FilePath $GatewayPython -ArgumentList $argLine -WorkingDirectory $repoRoot -WindowStyle Hidden | Out-Null
     if (Wait-ServiceHealth -HealthUrl $healthUrl -ServicePattern 'bbm-refusal-fallback-proxy' -Seconds 30) {
-        Write-Host "Refusal-fallback proxy: running; decisions are logged to $veniceFallbackLog."
+        $startedHealth = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+        if ([double]$startedHealth.timeouts.gemini_seconds -lt 420.0) {
+            [Console]::Error.WriteLine("Refusal-fallback proxy: started on port $activeFallbackPort but reports only $($startedHealth.timeouts.gemini_seconds) seconds for Gemini; expected at least 420. Check the launcher and proxy version.")
+            return $false
+        }
+        Write-Host "Refusal-fallback proxy: running on port $activeFallbackPort with a $($startedHealth.timeouts.gemini_seconds)-second Gemini timeout; decisions are logged to $veniceFallbackLog."
         return $true
     }
-    [Console]::Error.WriteLine("Refusal-fallback proxy: it did not report a healthy /health within 30s; see $veniceFallbackLog and the console above. Refusals will pass through unrescued (gemini-anon stays the translator).")
+    [Console]::Error.WriteLine("Refusal-fallback proxy: it did not report a healthy /health within 30s on port $activeFallbackPort; see $veniceFallbackLog and the console above. Refusals will pass through unrescued (gemini-anon stays the translator).")
     return $false
 }
 
@@ -235,7 +276,7 @@ if ($VeniceFallbackLimit -gt 0 -and -not $runningUnderCaptureHarness) {
 
 $activeApiBase = 'http://127.0.0.1:4995/v1'
 if ($fallbackReady) {
-    $activeApiBase = "http://127.0.0.1:$FallbackPort/v1"
+    $activeApiBase = "http://127.0.0.1:$activeFallbackPort/v1"
     Write-Host "Venice refusal fallback active: only the chunk whose Gemini reply is the standalone policy refusal is re-sent to the Venice bridge (limit $VeniceFallbackLimit per 24h); every other request - and every retryable provider error - stays on gemini-anon."
 }
 else {
@@ -296,7 +337,7 @@ Write-Verbose "NameWindowTokens=$NameWindowTokens; SourceSummaryTokens=$SourceSu
 Push-Location -LiteralPath $repoRoot
 try {
     Write-Verbose "Starting make_book.py with the configured translation route."
-    & python -X utf8 make_book.py @translationArgs
+    & python -X utf8 -m book_maker.supervisor -- make_book.py @translationArgs
     if ($null -ne $LASTEXITCODE) {
         $exitCode = $LASTEXITCODE
     }
@@ -311,7 +352,7 @@ finally {
 
 if ($exitCode -ne 0) {
     if ($ProtectedNames) {
-        [Console]::Error.WriteLine("Translation stopped with exit code $exitCode. Review the last 'Protected names:' stage message for the window, unit IDs, failed validation, and saved-progress details. The run keeps its recovery under the ongoing directory; rerun with -Resume after resolving the reported cause.")
+        [Console]::Error.WriteLine("Translation stopped with exit code $exitCode. Automatic recovery has either reached its no-progress limit or this failure requires intervention; see the supervisor and stage messages above. The saved recovery is under ongoing; -Resume continues its unfinished work.")
     }
     else {
         [Console]::Error.WriteLine("Translation stopped with exit code $exitCode. Review the Python error above and the saved recovery under the ongoing directory; rerun with -Resume after resolving the reported cause.")

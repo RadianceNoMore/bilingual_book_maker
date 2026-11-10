@@ -165,6 +165,8 @@ class FallbackRouter:
                       file=sys.stderr, flush=True)
         self.log(
             f"proxy starting; gemini={self.gemini_origin} venice={self.venice_origin} "
+            f"gemini-timeout={self.gemini_timeout:g}s "
+            f"venice-timeout={self.venice_timeout:g}s "
             f"venice-limit={self.venice_limit}/{int(options.venice_window_hours)}h"
         )
 
@@ -478,6 +480,10 @@ class FallbackRouter:
             "service": PROXY_SERVICE,
             "ok": True,
             "gemini": {"base": self.gemini_origin},
+            "timeouts": {
+                "gemini_seconds": self.gemini_timeout,
+                "venice_seconds": self.venice_timeout,
+            },
             "venice": venice,
             "limit": self.venice_limit,
             "window_hours": self.venice_window / 3600.0,
@@ -539,7 +545,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
         except (BrokenPipeError, ConnectionResetError, OSError):
-            # The SDK client gave up (its 300 s ceiling, or a run stopped by
+            # The SDK client gave up (its request deadline, or a run stopped by
             # the operator); the upstream answer is simply dropped.
             pass
 
@@ -575,8 +581,8 @@ def parse_args(argv=None):
                         help="Seconds to wait for a freshly started Venice to serve (default 90).")
     parser.add_argument("--venice-spawn-cooldown", type=float, default=600.0,
                         help="Seconds between start attempts after a failure (default 600).")
-    parser.add_argument("--gemini-timeout", type=float, default=110.0,
-                        help="Seconds for the primary route (default 110; client budget is 300 s).")
+    parser.add_argument("--gemini-timeout", type=float, default=420.0,
+                        help="Seconds for the primary route (default 420; allow slow Gemini responses to finish).")
     parser.add_argument("--venice-timeout", type=float, default=175.0,
                         help="Seconds for the rescue route (default 175; keeps under the 300 s budget).")
     parser.add_argument("--log-file", default=str(REPO_ROOT / "log" / "venice_fallback.log"),

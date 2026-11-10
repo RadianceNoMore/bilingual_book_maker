@@ -136,6 +136,24 @@ def _script_counts(text):
     return counts
 
 
+def _is_symbol_dominated_ornament(text):
+    """Recognize short kaomoji that contain ideographs as visual glyphs.
+
+    Some emoticons use Han characters such as 人 for a face or body. They
+    must survive unchanged, but their few letters should not trigger the
+    untranslated-prose guard when most of the line is punctuation/symbols.
+    """
+    visible = [char for char in text if not char.isspace()]
+    letters = sum(char.isalpha() for char in visible)
+    if not visible or not 0 < letters <= 8:
+        return False
+    symbol_count = sum(unicodedata.category(char).startswith("S") for char in visible)
+    decoration_count = sum(
+        unicodedata.category(char)[0] in {"S", "P"} for char in visible
+    )
+    return symbol_count >= 4 and decoration_count / len(visible) >= 0.65
+
+
 _WORD_TOKEN = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
@@ -236,7 +254,15 @@ def untranslated_reason(source, reply, target_language, source_language=None, *,
     source_scripts = set(_script_counts(original))
     source_only = source_scripts - target_scripts
     source_only_count = sum(reply_scripts.get(script, 0) for script in source_only)
-    if letter_count >= 4 and source_only_count / letter_count >= 0.50:
+    unchanged_ornament = (
+        original_normalized == translated_normalized
+        and _is_symbol_dominated_ornament(original)
+    )
+    if (
+        not unchanged_ornament
+        and letter_count >= 4
+        and source_only_count / letter_count >= 0.50
+    ):
         names = ", ".join(sorted(source_only))
         if original_normalized == translated_normalized:
             return f"source text was returned unchanged for target {target} ({names} script)"

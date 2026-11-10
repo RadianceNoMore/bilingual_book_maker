@@ -8,6 +8,43 @@ from ebooklib import ITEM_DOCUMENT, epub
 from book_maker.loader.epub_loader import EPUBBookLoader
 
 
+@pytest.mark.parametrize("source", ["151", " 152 ", "１５３"])
+def test_numeric_localization_preserves_source_without_provider(source):
+    loader = EPUBBookLoader.__new__(EPUBBookLoader)
+    loader._localized_cache = {}
+    saves = []
+    loader._save_progress = lambda: saves.append(dict(loader._localized_cache))
+    # No translation model exists: even name extraction must be skipped.
+    key = "toc:numeric"
+    assert loader._cached_localization(key, source) == source
+    assert loader._localized_cache[key] == source
+    assert len(saves) == 1
+    assert loader._cached_localization(key, source) == source
+    assert len(saves) == 1
+
+
+def test_numeric_toc_batch_preserves_source_without_provider():
+    from types import SimpleNamespace
+
+    loader = EPUBBookLoader.__new__(EPUBBookLoader)
+    loader.translate_metadata = True
+    loader.is_test = False
+    loader.plan_mode = False
+    loader._localized_cache = {}
+    saves = []
+    loader._save_progress = lambda: saves.append(dict(loader._localized_cache))
+    plan = SimpleNamespace(
+        item=SimpleNamespace(file_name="chapter.xhtml"),
+        selected=True,
+        navigation_labels=["151"],
+    )
+    records = [(None, ("chapter.xhtml", ""), "151", None, None)]
+    assert loader._translate_toc_batch([plan], records) == {}
+    assert set(loader._localized_cache.values()) == {"151"}
+    assert len(loader._localized_cache) == 2
+    assert len(saves) == 1
+
+
 class RecordingModel:
     instances = []
     TRANSLATION_ERROR_MARKER = "[Translation unavailable]"
